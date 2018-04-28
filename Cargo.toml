@@ -1,0 +1,7 @@
+[package]
+name = "reverse-checksum-renamer"
+version = "0.1.0"
+authors = ["Martin Feil <foss2017@sgdw.de>"]
+
+[dependencies]
+crc = "^1.0.0"

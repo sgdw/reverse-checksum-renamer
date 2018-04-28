@@ -1,0 +1,34 @@
+{
+    {
+        "symbolOutline.doSort": false,
+        "symbolOutline.sortOrder": [
+          "Class",
+          "Module",
+          "Constant",
+          "Interface",
+          "*",
+          "Constructor",
+          "Function",
+          "Method"
+        ],
+        "symbolOutline.expandNodes": [
+          "Module",
+          "Class",
+          "Interface",
+          "Namespace",
+          "Object",
+          "Package",
+          "Struct"
+        ],
+        "symbolOutline.topLevel": [
+            "Module",
+            "Class",
+            "Interface",
+            "Namespace",
+            "Object",
+            "Package",
+            "Struct",
+            "Function",
+        ]
+      }
+}
