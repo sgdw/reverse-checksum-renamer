@@ -7,6 +7,7 @@ use std::io::Read;
 use std::io::Write;
 use std::io::BufRead;
 use std::io::BufReader;
+use std::io::ErrorKind;
 
 use std::fs;
 use std::fs::File;
@@ -68,25 +69,62 @@ pub fn get_crc32_from_file(file: &String, print_progress: bool) -> Result<u32, s
     Ok(digest.sum32())
 }
 
-pub fn read_sfv(filepath: &String) -> Vec<ChecksumEntry> {
-    let mut entries: Vec<ChecksumEntry> = Vec::new();
-
-    let f = match File::open(filepath) {
-        Ok(v) => v,
-        Err(_e) => return entries
-    };
-
-    let file = BufReader::new(&f);
-    for rline in file.lines() {
-        let line = rline.unwrap();
-        let entry = parse_sfv_line(&line);
-        entries.push(entry);
-    }
-
-    entries
+pub struct SfvFile {
+    pub valid: bool,
+    pub entries: Vec<ChecksumEntry>,
 }
 
-pub fn parse_sfv_line(line_par: &String) -> ChecksumEntry {
+pub fn is_sfv(filepath: &String) -> bool {
+    let res = _read_sfv(filepath, true);
+    if res.is_ok() {
+        let sfv = res.unwrap();
+        if sfv.entries.len() == 0 {
+            return false;
+        } else {
+            match sfv.entries.first() {
+                Some(e) => return e.valid,
+                None    => return false,
+            }
+        }
+    }
+    false
+}
+
+pub fn read_sfv(filepath: &String) -> Result<SfvFile, std::io::Error> {
+    return _read_sfv(filepath, false);
+}
+
+fn _read_sfv(filepath: &String, check_only: bool) -> Result<SfvFile, std::io::Error> {
+    let mut sfv_file = SfvFile {
+        valid: true,
+        entries: Vec::new(),
+    };
+
+    let fres: Result<File, std::io::Error> = match File::open(filepath) {
+        Ok(v) => Ok(v),
+        Err(_e) => return Err(_e)
+    };
+
+    let fh = fres.unwrap();
+    let file = BufReader::new(&fh);
+    for rline in file.lines() {
+        if rline.is_ok() {
+            let line = rline.unwrap();
+            let entry = parse_sfv_line(&line);
+            if entry.is_some() {
+                sfv_file.entries.push(entry.unwrap());
+                if check_only {
+                    return Ok(sfv_file);
+                }
+            }
+        } else {
+            return Err(std::io::Error::new(ErrorKind::Other, rline.err().unwrap()));
+        }
+    }
+    Ok(sfv_file)
+}
+
+pub fn parse_sfv_line(line_par: &String) -> Option<ChecksumEntry> {
     let mut entry = ChecksumEntry {
         filename: String::new(),
         path: String::new(),
@@ -98,8 +136,7 @@ pub fn parse_sfv_line(line_par: &String) -> ChecksumEntry {
     let num_chars = line.chars().count();
 
     if line.starts_with(';') {
-        entry.valid = false;
-        return entry;
+        return None;
     }
 
     let mut checksum = String::new();
@@ -108,9 +145,18 @@ pub fn parse_sfv_line(line_par: &String) -> ChecksumEntry {
 
     for c in line.chars().rev() {
         if c == ' ' || c == '\t' {
+            if i != 8 {
+                entry.valid = false;
+                return Some(entry);                
+            }
             break;
         } else {
-            checksum.push(c);
+            if c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F' {
+                checksum.push(c);
+            } else {
+                entry.valid = false;
+                return Some(entry);
+            }
         }
         i += 1;
     }
@@ -120,5 +166,5 @@ pub fn parse_sfv_line(line_par: &String) -> ChecksumEntry {
     entry.filename = line_par.chars().take(num_chars-i-1).collect::<String>();
     entry.checksum_crc32 = u32::from_str_radix(&checksum, 16).unwrap();
 
-    entry
+    Some(entry)
 }
