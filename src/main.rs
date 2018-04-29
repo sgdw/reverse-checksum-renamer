@@ -170,6 +170,51 @@ struct RenamingRecommendation {
     checksum_crc32: u32,
 }
 
+fn fix_misnamed_sfv_files(path_s: &String, dry_run: bool, verbose: bool) -> u32 {
+    let sfv_extension = ".sfv";
+    let mut renamed_files = 0;
+
+    let res = get_files_from_path(path_s);
+    if res.is_ok() {
+        for file_path in res.unwrap() {
+            
+            let path = String::from(file_path.as_path().to_str().unwrap());
+            let mut new_path: Option<String> = None;
+
+            if file_verification::is_sfv(&path) {
+                if !path.ends_with(&sfv_extension) {
+                    // rename +.sfv
+                    new_path = Some(path.clone() + &sfv_extension);
+                } else {
+                    if verbose { println!("Keep {:?} a SFV file", path); }
+                }
+            } else {
+                if path.ends_with(&sfv_extension) {
+                    // rename +_not
+                    new_path = Some(path.clone() + "_not");
+                } else {
+                    if verbose { println!("Keep {:?} not a SFV file", path); }
+                }
+            }
+
+            if new_path.is_some() {
+                let new_path = new_path.unwrap();
+                if Path::new(&new_path).exists() {
+                    println!("Will not rename {:?} to {:?} because target file already exists", path, new_path);
+                } else {
+                    println!("Rename {:?} to {:?}", path, new_path);
+                    if !dry_run {
+                        std::fs::rename(path, new_path).expect("Renaming failed!");
+                        renamed_files += 1;
+                    }
+                }
+            }
+
+        }
+    }
+    renamed_files
+}
+
 fn repair_filenames_in_path(source_file_path: &String, destination_file_path: &String, 
         target_checksums: &Vec<file_verification::ChecksumEntry>, dry_run: bool, verbose: bool) {
 
@@ -235,51 +280,6 @@ fn repair_filenames_in_path(source_file_path: &String, destination_file_path: &S
 fn get_repair_recommendations_by_path(source_file_path: &String, target_checksums: &Vec<file_verification::ChecksumEntry>) -> Vec<RenamingRecommendation> {
     let existing_checksums = get_checksums_from_path(&source_file_path);
     return get_repair_recommendations(&existing_checksums, &target_checksums);
-}
-
-fn fix_misnamed_sfv_files(path_s: &String, dry_run: bool, verbose: bool) -> u32 {
-    let sfv_extension = ".sfv";
-    let mut renamed_files = 0;
-
-    let res = get_files_from_path(path_s);
-    if res.is_ok() {
-        for file_path in res.unwrap() {
-            
-            let path = String::from(file_path.as_path().to_str().unwrap());
-            let mut new_path: Option<String> = None;
-
-            if file_verification::is_sfv(&path) {
-                if !path.ends_with(&sfv_extension) {
-                    // rename +.sfv
-                    new_path = Some(path.clone() + &sfv_extension);
-                } else {
-                    if verbose { println!("Keep {:?} a SFV file", path); }
-                }
-            } else {
-                if path.ends_with(&sfv_extension) {
-                    // rename +_not
-                    new_path = Some(path.clone() + "_not");
-                } else {
-                    if verbose { println!("Keep {:?} not a SFV file", path); }
-                }
-            }
-
-            if new_path.is_some() {
-                let new_path = new_path.unwrap();
-                if Path::new(&new_path).exists() {
-                    println!("Will not rename {:?} to {:?} because target file already exists", path, new_path);
-                } else {
-                    println!("Rename {:?} to {:?}", path, new_path);
-                    if !dry_run {
-                        std::fs::rename(path, new_path).expect("Renaming failed!");
-                        renamed_files += 1;
-                    }
-                }
-            }
-
-        }
-    }
-    renamed_files
 }
 
 fn get_repair_recommendations(existing_checksums: &Vec<file_verification::ChecksumEntry>, target_checksums: &Vec<file_verification::ChecksumEntry>) -> Vec<RenamingRecommendation> {
