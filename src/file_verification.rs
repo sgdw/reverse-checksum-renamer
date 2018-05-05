@@ -3,8 +3,11 @@
 extern crate crc;
 
 use std;
+use std::fmt;
+
 use std::io::Read;
 use std::io::Write;
+use std::io::{Seek, SeekFrom};
 use std::io::BufRead;
 use std::io::BufReader;
 use std::io::ErrorKind;
@@ -19,6 +22,17 @@ pub struct ChecksumEntry {
     pub path: String,
     pub checksum_crc32: u32,
     pub valid: bool
+}
+
+impl fmt::Debug for ChecksumEntry {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ChecksumEntry(filename:{:?}|path:{:?}|checksum_crc32:{:?}|valid:{:?})", 
+            self.filename,
+            self.path,
+            self.checksum_crc32,
+            self.valid,
+        )
+    }
 }
 
 pub fn get_crc32_from_file(file: &String, print_progress: bool) -> Result<u32, std::io::Error> {
@@ -69,9 +83,18 @@ pub fn get_crc32_from_file(file: &String, print_progress: bool) -> Result<u32, s
     Ok(digest.sum32())
 }
 
-pub struct SfvFile {
-    pub valid: bool,
+pub struct ChecksumCatalogFile {
     pub entries: Vec<ChecksumEntry>,
+    pub valid: bool,
+}
+
+impl fmt::Debug for ChecksumCatalogFile {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ChecksumCatalogFile(entries:{:?}|valid:{:?})", 
+            self.entries,
+            self.valid,
+        )
+    }
 }
 
 pub fn is_sfv(filepath: &String) -> bool {
@@ -90,12 +113,12 @@ pub fn is_sfv(filepath: &String) -> bool {
     false
 }
 
-pub fn read_sfv(filepath: &String) -> Result<SfvFile, std::io::Error> {
+pub fn read_sfv(filepath: &String) -> Result<ChecksumCatalogFile, std::io::Error> {
     return _read_sfv(filepath, false);
 }
 
-fn _read_sfv(filepath: &String, check_only: bool) -> Result<SfvFile, std::io::Error> {
-    let mut sfv_file = SfvFile {
+fn _read_sfv(filepath: &String, check_only: bool) -> Result<ChecksumCatalogFile, std::io::Error> {
+    let mut sfv_file = ChecksumCatalogFile {
         valid: true,
         entries: Vec::new(),
     };
@@ -167,4 +190,116 @@ pub fn parse_sfv_line(line_par: &String) -> Option<ChecksumEntry> {
     entry.checksum_crc32 = u32::from_str_radix(&checksum, 16).unwrap();
 
     Some(entry)
+}
+
+fn printable_string_from(buffer: &[u8]) -> String {
+    let mut ptbls = String::new();
+    for c in buffer.iter().cloned() {
+        if c >= 32u8 && c <= 126u8 {
+            ptbls.push(c as char);
+        } else {
+            ptbls.push(' ');
+        }
+    }
+    ptbls
+}
+
+fn byte_array_to_hex(bytes: &[u8]) -> String {
+    let mut s = String::new();
+    for &byte in bytes {
+        if s.len() > 0 { s += " " }
+        s += &format!("{:02X}", byte);
+        // write!(&mut s, "{:X} ", byte).expect("Unable to write");
+    }
+    s    
+}
+
+#[derive(Default)]
+struct Par2PacketHead {
+    pub magic: [u8;8],
+    pub len: u64,
+    pub packet_hash: [u8;16],
+    pub recovery_set_id: [u8;16],
+    pub packet_type: [u8;16],
+}
+
+impl fmt::Debug for Par2PacketHead {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Par2PacketHead(magic:[{}]|len:{:?}|packet_hash:[{}]|recovery_set_id:[{}]|packet_type:[{}] '{}')", 
+            byte_array_to_hex(&self.magic),
+            self.len,
+            byte_array_to_hex(&self.packet_hash),
+            byte_array_to_hex(&self.recovery_set_id),
+            byte_array_to_hex(&self.packet_type),
+            printable_string_from(&self.packet_type),
+        )
+    }
+}
+
+pub fn read_par2(filepath: &String) -> Result<ChecksumCatalogFile, std::io::Error> {
+    return _read_par2(filepath, false);
+}
+
+fn _read_par2(filepath: &String, _check_only: bool) -> Result<ChecksumCatalogFile, std::io::Error> {
+    let sfv_file = ChecksumCatalogFile {
+        valid: true,
+        entries: Vec::new(),
+    };
+
+    let fres: Result<File, std::io::Error> = match File::open(filepath) {
+        Ok(v) => Ok(v),
+        Err(_e) => return Err(_e)
+    };
+
+    const HEAD_LEN_I64: i64 = 8+8+16+16+16;
+    const HEAD_LEN: usize = 8+8+16+16+16;
+    let mut buf_head: [u8; HEAD_LEN] = [0; HEAD_LEN];
+
+    if fres.is_ok() {
+        let mut fh = fres.unwrap();
+
+        loop {
+            let bytes = fh.read(&mut buf_head)?;
+            if bytes == 0 { break; }
+            let head = _parse_par2_packet_head(&buf_head[0..bytes]);
+
+            if head.is_some() {
+                let head = head.unwrap();
+                println!("{:?}", head);
+
+                let to_skip = 0i64 + head.len as i64 - HEAD_LEN_I64;
+
+                fh.seek(SeekFrom::Current(to_skip)).unwrap();
+
+            } else {
+                break;
+            }
+        }
+    }
+
+    Ok(sfv_file)
+}
+
+fn _parse_par2_packet_head(buffer: &[u8]) -> Option<Par2PacketHead> {
+    let mut head = Par2PacketHead {
+        magic: Default::default(), // 0;8
+        len: 0, // 8;8
+        packet_hash: Default::default(), // 16:16
+        recovery_set_id: Default::default(), // 32:16
+        packet_type: Default::default(), // 48:16
+    };
+
+    // println!("buffer.len={:?} head.magic={:?} buffer[0..7].len={:?}", buffer.len(), head.magic, buffer[0..7].len());
+
+    head.magic.copy_from_slice(&buffer[0..8]);
+    head.len = 0;
+    for i in 0..7 {
+        // println!("{}: {}", i, buffer[8+i]);
+        head.len += (buffer[8+i] as u64) << (i*8);
+    }
+    head.packet_hash.copy_from_slice(&buffer[16..32]);
+    head.recovery_set_id.copy_from_slice(&buffer[32..48]);
+    head.packet_type.copy_from_slice(&buffer[48..64]);
+
+    Some(head)
 }

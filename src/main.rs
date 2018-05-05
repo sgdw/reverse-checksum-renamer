@@ -17,10 +17,11 @@ fn main() {
 
     let mut source_file_path: Option<String> = None;
     let mut destination_file_path: Option<String> = None;
-    let mut sfv_files: Vec<String> = Vec::new();
+    let mut verification_files: Vec<String> = Vec::new();
     
     let mut file_to_checksum: Option<String> = None;
     let mut file_to_check_if_sfv: Option<String> = None;
+    let mut file_to_par2_decode: Option<String> = None;
 
     let mut do_fix_misnamed_sfv_files = false;
 
@@ -40,6 +41,11 @@ fn main() {
             } else if args[i] == "-o" {
                 if i >= args.len() { die(&format!("Missing value for '{}' parameter", args[i]), 1); return; }
                 destination_file_path = Some(args[i+1].to_string());
+                skip = 1;
+
+            } else if args[i] == "--show-par2" {
+                if i >= args.len() { die(&format!("Missing value for '{}' parameter", args[i]), 1); return; }
+                file_to_par2_decode = Some(args[i+1].to_string());
                 skip = 1;
 
             } else if args[i] == "--test-sfv" {
@@ -66,6 +72,8 @@ fn main() {
                 println!("Usage: reverse-checksum-renamer [-i <input>] [-o <output>] <SFV files>");
                 println!("  -i  input folder");
                 println!("  -o  output folder");
+                println!("  --show-par2");
+                println!("      show referenced files in par2");
                 println!("  --fix-sfv-files");
                 println!("      find SFV files and rename them");
                 println!("  --checksum-file");
@@ -77,7 +85,7 @@ fn main() {
                 return;
 
             } else {
-                sfv_files.push(args[i].to_string());
+                verification_files.push(args[i].to_string());
                 if verbose { println!("Adding SFV file: {:?}", args[i]); }
             }
         }
@@ -113,6 +121,14 @@ fn main() {
         }        
     }
 
+    if file_to_par2_decode.is_some() {
+        let filepath = file_to_par2_decode.unwrap();
+        println!("Decoding '{}' ...", filepath);
+        let par2_file = file_verification::read_par2(&filepath);
+        println!("{:?}", par2_file);
+        return;
+    }
+
     if do_fix_misnamed_sfv_files && source_file_path.is_some() {
         let file = source_file_path.as_ref().unwrap();
         fix_misnamed_sfv_files(&file, dry_run, verbose);
@@ -122,8 +138,8 @@ fn main() {
 
     let mut target_checksums: Vec<file_verification::ChecksumEntry> = Vec::new();
 
-    if sfv_files.len() > 0 {
-        for sfv_file_path in &sfv_files {
+    if verification_files.len() > 0 {
+        for sfv_file_path in &verification_files {
             println!("Reading {:?} ...", sfv_file_path);
             let sfv_file_result = file_verification::read_sfv(&sfv_file_path);
             if sfv_file_result.is_ok() {
