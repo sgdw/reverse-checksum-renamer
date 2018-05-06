@@ -1,11 +1,13 @@
 // https://doc.rust-lang.org/book/second-edition/ch01-00-introduction.html
 
+mod file_verification;
+mod utils;
+mod par2_reader;
+
 use std::env;
 use std::process;
 
 use std::path::{Path, PathBuf};
-
-mod file_verification;
 
 fn main() {
     const VERSION_MAJ: u32 = 0;
@@ -73,11 +75,11 @@ fn main() {
                 println!("  -i  input folder");
                 println!("  -o  output folder");
                 println!("  --show-par2");
-                println!("      show referenced files in par2");
+                println!("        show referenced files in par2");
                 println!("  --fix-sfv-files");
-                println!("      find SFV files and rename them");
+                println!("        find SFV files and rename them");
                 println!("  --checksum-file");
-                println!("      print checksums of files");
+                println!("        print checksums of files");
                 println!("  --test-sfv");
                 println!("  -v  verbose");
                 println!("  -d  dry run");
@@ -107,8 +109,10 @@ fn main() {
     if file_to_checksum.is_some() {
         let filepath = file_to_checksum.unwrap();
         println!("Calculating checksum of '{}' ...", filepath);
-        let crc32_of_file = file_verification::get_crc32_from_file(&filepath, true).unwrap();
-        println!("CRC32 of file: '{}' is {:x}\n", filepath, crc32_of_file);
+        let checksum_of_file = file_verification::get_checksum_from_file(&filepath, true).unwrap();
+        println!("CRC32: {:x}", checksum_of_file.checksum_crc32.unwrap());
+        println!("MD5:   {}", checksum_of_file.checksum_md5_as_str());
+        println!("");
     }
 
     if file_to_check_if_sfv.is_some() {
@@ -124,7 +128,7 @@ fn main() {
     if file_to_par2_decode.is_some() {
         let filepath = file_to_par2_decode.unwrap();
         println!("Decoding '{}' ...", filepath);
-        let par2_file = file_verification::read_par2(&filepath);
+        let par2_file = par2_reader::read_par2(&filepath);
         println!("{:?}", par2_file);
         return;
     }
@@ -148,7 +152,7 @@ fn main() {
                 let mut i = 0;
                 for e in &sfv_file.entries {
                     i += 1;
-                    println!("[{}] '{}' crc32:{:x}", i, e.filename, e.checksum_crc32);
+                    println!("[{}] '{}' crc32:{:x}", i, e.filename, e.checksum_crc32.unwrap());
                 }
                 println!("");
                 sfv_file.entries.into_iter().for_each(|c| target_checksums.push(c));
@@ -306,7 +310,7 @@ fn get_repair_recommendations(existing_checksums: &Vec<file_verification::Checks
                 recommendations.push(RenamingRecommendation {
                     source_file: ecs.path.clone(),
                     target_name: tcs.filename.clone(),
-                    checksum_crc32: ecs.checksum_crc32,
+                    checksum_crc32: ecs.checksum_crc32.unwrap(),
                 });
             }
         }
@@ -320,15 +324,8 @@ fn get_checksums_from_path(source_file_path: &String) -> Vec<file_verification::
 
     for existing_file in existing_files {
         let path = String::from(existing_file.as_path().to_str().unwrap());
-        let filename = String::from(existing_file.as_path().file_name().unwrap().to_str().unwrap());
         println!("Checking file '{}' ...", path);
-        let crc32 = file_verification::get_crc32_from_file(&path, true).unwrap();
-        let csf = file_verification::ChecksumEntry {
-            filename: filename,
-            path: path,
-            checksum_crc32: crc32,
-            valid: true,
-        };
+        let csf = file_verification::get_checksum_from_file(&path, true).unwrap();
         existing_checksums.push(csf);
     }
     existing_checksums

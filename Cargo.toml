@@ -5,3 +5,4 @@ authors = ["Martin Feil <foss2017@sgdw.de>"]
 
 [dependencies]
 crc = "^1.0.0"
+md5 = "0.3.7"
