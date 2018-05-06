@@ -29,3 +29,11 @@ pub fn slice_u8_to_u64(buffer: &[u8]) -> u64 {
     }
     val
 }
+
+pub fn slice_u8_to_u32(buffer: &[u8]) -> u32 {
+    let mut val: u32 = 0;
+    for i in 0..3 {
+        val += (buffer[i] as u32) << (i*8);
+    }
+    val
+}

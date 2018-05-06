@@ -1,12 +1,10 @@
 
 use std;
 use std::fmt;
+use std::vec::Vec;
 
 use std::io::Read;
 use std::io::{Seek, SeekFrom};
-// use std::io::BufRead;
-// use std::io::BufReader;
-// use std::io::ErrorKind;
 
 use std::fs::File;
 
@@ -65,8 +63,7 @@ struct Par2PacketHead {
     pub packet_body: Par2PacketTypes,
 }
 
-#[derive(Default)]
-#[derive(Debug)]
+#[derive(Default)] #[derive(Debug)]
 struct Par2MainPacket {
     pub slice_size: u64,
     pub number_of_files: u32,
@@ -88,17 +85,28 @@ impl fmt::Debug for Par2CreatorPacket {
 }
 
 #[derive(Default)]
-#[derive(Debug)]
 struct Par2FileDescriptorPacket {
     pub file_id: [u8;16],
     pub entire_file_md5: [u8;16],
     pub first_16k_md5: [u8;16],
     pub length_of_file: u64,
+    pub name_of_file: String,
     // ?*4	ASCII char array	Name of the file
 }
 
-#[derive(Default)]
-#[derive(Debug)]
+impl fmt::Debug for Par2FileDescriptorPacket {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Par2FileDescriptorPacket {{ file_id: {}, entire_file_md5: {}, first_16k_md5: {}, length_of_file: {:?}, name_of_file: '{}' }}", 
+            utils::byte_array_to_hex(&self.file_id),
+            utils::byte_array_to_hex(&self.entire_file_md5),
+            utils::byte_array_to_hex(&self.first_16k_md5),
+            self.length_of_file,
+            self.name_of_file,
+        )
+    }
+}
+
+#[derive(Default)] #[derive(Debug)]
 struct Par2InputFileSliceChecksumPacket {
     pub file_id: [u8;16],
     // ?*20	{MD5 Hash, CRC32} MD5 Hash and CRC32 pairs for the slices
@@ -106,12 +114,12 @@ struct Par2InputFileSliceChecksumPacket {
 
 impl fmt::Debug for Par2PacketHead {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Par2PacketHead(magic:'{}'|len:{:?}|packet_hash:{}|recovery_set_id:{}|packet_type:{} '{}')", 
+        write!(f, "Par2PacketHead {{ magic: '{}', len: {:?}, packet_hash: {}, recovery_set_id: {}, packet_type: '{}' }}", 
             utils::printable_string_from(&self.magic),
             self.len,
             utils::byte_array_to_hex(&self.packet_hash),
             utils::byte_array_to_hex(&self.recovery_set_id),
-            utils::byte_array_to_hex(&self.packet_type),
+            // utils::byte_array_to_hex(&self.packet_type),
             utils::printable_string_from(&self.packet_type),
         )
     }
@@ -192,6 +200,7 @@ fn _parse_par2_packet_body(head: &Par2PacketHead, mut fh: &File) -> Option<Par2P
     let to_skip = 0i64 + head.len as i64 - HEAD_LEN_I64;
 
     let packet_type = match &head.packet_type {
+        
         PAR2_PKT_TYPE_CREATOR => {
             let mut body = Par2CreatorPacket {
                 client_identifier: String::new(),
@@ -200,9 +209,47 @@ fn _parse_par2_packet_body(head: &Par2PacketHead, mut fh: &File) -> Option<Par2P
 
             Par2PacketTypes::Creator(body)
         },
-        PAR2_PKT_TYPE_MAIN => Par2PacketTypes::Unknown,
+
+        PAR2_PKT_TYPE_MAIN => {
+            let mut buffer_vec: Vec<u8> = vec![0;to_skip as usize];
+
+            buffer_vec.reserve_exact(to_skip as usize);
+            let mut buffer = buffer_vec.as_mut_slice();
+
+            &fh.take(to_skip as u64).read(buffer);
+
+            let mut body = Par2MainPacket {
+                slice_size: utils::slice_u8_to_u64(&buffer[0..8]),
+                number_of_files: utils::slice_u8_to_u32(&buffer[8..12]),
+            };
+
+            Par2PacketTypes::Main(body)
+        },
+        
         PAR2_PKT_TYPE_IFSC => Par2PacketTypes::Unknown,
-        PAR2_PKT_TYPE_FILE_DESC => Par2PacketTypes::Unknown,
+        
+        PAR2_PKT_TYPE_FILE_DESC => {
+            let mut buffer_vec: Vec<u8> = vec![0;to_skip as usize];
+
+            buffer_vec.reserve_exact(to_skip as usize);
+            let mut buffer = buffer_vec.as_mut_slice();
+
+            &fh.take(to_skip as u64).read(buffer);
+
+            let mut body = Par2FileDescriptorPacket {
+                file_id: Default::default(),
+                entire_file_md5: Default::default(),
+                first_16k_md5: Default::default(),
+                length_of_file: utils::slice_u8_to_u64(&buffer[48..56]),
+                name_of_file: String::from_utf8(buffer[56..(to_skip-1) as usize].to_vec()).unwrap(),
+            };
+            body.file_id.copy_from_slice(&buffer[0..16]);
+            body.entire_file_md5.copy_from_slice(&buffer[16..32]);
+            body.first_16k_md5.copy_from_slice(&buffer[32..48]);
+
+            Par2PacketTypes::FileDescriptor(body)
+        },
+        
         _ => Par2PacketTypes::Unknown,
     };
 
