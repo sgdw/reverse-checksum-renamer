@@ -19,13 +19,13 @@ fn main() {
 
     let mut source_file_path: Option<String> = None;
     let mut destination_file_path: Option<String> = None;
-    let mut verification_files: Vec<String> = Vec::new();
+    let mut catalog_files: Vec<String> = Vec::new();
     
     let mut file_to_checksum: Option<String> = None;
     let mut file_to_check_if_sfv: Option<String> = None;
     let mut file_to_par2_decode: Option<String> = None;
 
-    let mut do_fix_misnamed_sfv_files = false;
+    let mut do_fix_misnamed_catalog_files = false;
 
     let mut verbose = false;
     let mut dry_run = false;
@@ -60,9 +60,9 @@ fn main() {
                 file_to_checksum = Some(args[i+1].to_string());
                 skip = 1;
 
-            } else if args[i] == "--fix-sfv-files" {
+            } else if args[i] == "--fix-catalog-files" || args[i] == "--fcf" {
                 if i >= args.len() { die(&format!("Missing value for '{}' parameter", args[i]), 1); return; }
-                do_fix_misnamed_sfv_files = true;
+                do_fix_misnamed_catalog_files = true;
 
             } else if args[i] == "-v" {
                 verbose = true;
@@ -76,7 +76,7 @@ fn main() {
                 println!("  -o  output folder");
                 println!("  --show-par2");
                 println!("        show referenced files in par2");
-                println!("  --fix-sfv-files");
+                println!("  --fix-catalog-files / --fcf");
                 println!("        find SFV files and rename them");
                 println!("  --checksum-file");
                 println!("        print checksums of files");
@@ -87,7 +87,7 @@ fn main() {
                 return;
 
             } else {
-                verification_files.push(args[i].to_string());
+                catalog_files.push(args[i].to_string());
                 if verbose { println!("Adding SFV file: {:?}", args[i]); }
             }
         }
@@ -133,34 +133,35 @@ fn main() {
         return;
     }
 
-    if do_fix_misnamed_sfv_files && source_file_path.is_some() {
+    if do_fix_misnamed_catalog_files && source_file_path.is_some() {
         let file = source_file_path.as_ref().unwrap();
         fix_misnamed_sfv_files(&file, dry_run, verbose);
         return; // Always exit here, because if there were SFV files as input parameters 
                 // from a glob, they might not be the same
     }
 
-    let mut target_checksums: Vec<file_verification::ChecksumEntry> = Vec::new();
+    let mut source_catalogs: Vec<file_verification::ChecksumCatalogFile> = Vec::new();
 
-    if verification_files.len() > 0 {
-        for sfv_file_path in &verification_files {
-            println!("Reading {:?} ...", sfv_file_path);
-            let sfv_file_result = file_verification::read_sfv(&sfv_file_path);
+    if catalog_files.len() > 0 {
+        for catalog_file_path in &catalog_files {
+            println!("Reading {:?} ...", catalog_file_path);
+            let sfv_file_result = file_verification::read_sfv(&catalog_file_path);
             if sfv_file_result.is_ok() {
                 let sfv_file = sfv_file_result.unwrap();
-                println!("{:?} entries found in '{:?}':", sfv_file.entries.len(), sfv_file_path);
+                println!("{:?} entries found in '{:?}':", sfv_file.entries.len(), catalog_file_path);
                 let mut i = 0;
                 for e in &sfv_file.entries {
                     i += 1;
                     println!("[{}] '{}' crc32:{:x}", i, e.filename, e.checksum_crc32.unwrap());
                 }
                 println!("");
-                sfv_file.entries.into_iter().for_each(|c| target_checksums.push(c));
+                // sfv_file.entries.into_iter().for_each(|c| target_checksums.push(c));
+                source_catalogs.push(sfv_file);
             }
         }
     }
 
-    if source_file_path.is_some() && target_checksums.len() > 0 {
+    if source_file_path.is_some() && source_catalogs.len() > 0 {
         let mut paths_ok = true;
 
         if !Path::new(&source_file_path.as_ref().unwrap()).exists() {
@@ -174,6 +175,10 @@ fn main() {
         }
 
         if paths_ok {
+            let mut target_checksums: Vec<file_verification::ChecksumEntry> = Vec::new();
+            for catalog in source_catalogs {
+                catalog.entries.into_iter().for_each(|c| target_checksums.push(c));
+            }
             repair_filenames_in_path(&source_file_path.unwrap(), &destination_file_path.unwrap(), &target_checksums, dry_run, verbose);
         }
     }

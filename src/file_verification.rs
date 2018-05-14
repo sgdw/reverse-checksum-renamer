@@ -113,9 +113,16 @@ pub fn get_checksum_from_file(file: &String, print_progress: bool) -> Result<Che
     Ok(entry)
 }
 
+pub enum SourceTypes {
+    SFV,
+    PAR2
+}
+
 pub struct ChecksumCatalogFile {
     pub entries: Vec<ChecksumEntry>,
     pub valid: bool,
+    pub complete: bool,
+    pub source_type: SourceTypes,
 }
 
 impl fmt::Debug for ChecksumCatalogFile {
@@ -151,6 +158,8 @@ fn _read_sfv(filepath: &String, check_only: bool) -> Result<ChecksumCatalogFile,
     let mut sfv_file = ChecksumCatalogFile {
         valid: true,
         entries: Vec::new(),
+        complete: false,
+        source_type: SourceTypes::SFV,
     };
 
     let fres: Result<File, std::io::Error> = match File::open(filepath) {

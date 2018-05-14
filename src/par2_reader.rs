@@ -130,9 +130,11 @@ pub fn read_par2(filepath: &String) -> Result<file_verification::ChecksumCatalog
 }
 
 fn _read_par2(filepath: &String, _check_only: bool) -> Result<file_verification::ChecksumCatalogFile, std::io::Error> {
-    let sfv_file = file_verification::ChecksumCatalogFile {
+    let mut sfv_file = file_verification::ChecksumCatalogFile {
         valid: true,
         entries: Vec::new(),
+        complete: false,
+        source_type: file_verification::SourceTypes::PAR2,
     };
 
     let fres: Result<File, std::io::Error> = match File::open(filepath) {
@@ -166,6 +168,7 @@ fn _read_par2(filepath: &String, _check_only: bool) -> Result<file_verification:
                 }             
 
             } else {
+                sfv_file.valid = false;
                 break;
             }
         }
