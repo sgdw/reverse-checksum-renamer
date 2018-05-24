@@ -13,8 +13,6 @@ fn main() {
     const VERSION_MAJ: u32 = 0;
     const VERSION_MIN: u32 = 1;
 
-    println!("reverse-checksum-renamer V{}.{}:\n", VERSION_MAJ, VERSION_MIN);
-
     let args: Vec<_> = env::args().collect();
 
     let mut source_file_path: Option<String> = None;
@@ -26,9 +24,14 @@ fn main() {
     let mut file_to_par2_decode: Option<String> = None;
 
     let mut do_fix_misnamed_catalog_files = false;
+    let mut do_show_usage = false;
 
     let mut verbose = false;
     let mut dry_run = false;
+
+    if args.len() == 1 {
+        do_show_usage = true;
+    }
 
     let mut skip = 0;
     for i in 1 .. args.len() {
@@ -71,26 +74,33 @@ fn main() {
                 dry_run = true;
 
             } else if args[i] == "--help" {
-                println!("Usage: reverse-checksum-renamer [-i <input>] [-o <output>] <SFV files>");
-                println!("  -i  input folder");
-                println!("  -o  output folder");
-                println!("  --show-par2");
-                println!("        show referenced files in par2");
-                println!("  --fix-catalog-files / --fcf");
-                println!("        find SFV files and rename them");
-                println!("  --checksum-file");
-                println!("        print checksums of files");
-                println!("  --test-sfv");
-                println!("  -v  verbose");
-                println!("  -d  dry run");
-
-                return;
+                do_show_usage = true;
 
             } else {
                 catalog_files.push(args[i].to_string());
                 if verbose { println!("Adding SFV file: {:?}", args[i]); }
             }
         }
+    }
+
+    if verbose {
+        println!("reverse-checksum-renamer V{}.{}", VERSION_MAJ, VERSION_MIN);
+    }
+
+    if do_show_usage {
+        println!("Usage: reverse-checksum-renamer [-i <input>] [-o <output>] <SFV files>");
+        println!("  -i  input folder");
+        println!("  -o  output folder");
+        println!("  --show-par2");
+        println!("        show referenced files in par2");
+        println!("  --fix-catalog-files / --fcf");
+        println!("        find SFV files and rename them");
+        println!("  --checksum-file");
+        println!("        print checksums of files");
+        println!("  --test-sfv");
+        println!("  -v  verbose");
+        println!("  -d  dry run");
+        return;
     }
 
     if source_file_path.is_none() {
@@ -135,7 +145,7 @@ fn main() {
 
     if do_fix_misnamed_catalog_files && source_file_path.is_some() {
         let file = source_file_path.as_ref().unwrap();
-        fix_misnamed_sfv_files(&file, dry_run, verbose);
+        fix_misnamed_catalog_files(&file, dry_run, verbose);
         return; // Always exit here, because if there were SFV files as input parameters 
                 // from a glob, they might not be the same
     }
@@ -176,10 +186,14 @@ fn main() {
 
         if paths_ok {
             let mut target_checksums: Vec<file_verification::ChecksumEntry> = Vec::new();
+
+            let existing_checksums = get_checksums_from_path(&source_file_path.unwrap());
+
             for catalog in source_catalogs {
                 catalog.entries.into_iter().for_each(|c| target_checksums.push(c));
             }
-            repair_filenames_in_path(&source_file_path.unwrap(), &destination_file_path.unwrap(), &target_checksums, dry_run, verbose);
+
+            repair_filenames(&existing_checksums, &target_checksums, &destination_file_path.unwrap(), dry_run, verbose);
         }
     }
 }
@@ -195,8 +209,9 @@ struct RenamingRecommendation {
     checksum_crc32: u32,
 }
 
-fn fix_misnamed_sfv_files(path_s: &String, dry_run: bool, verbose: bool) -> u32 {
+fn fix_misnamed_catalog_files(path_s: &String, dry_run: bool, verbose: bool) -> u32 {
     let sfv_extension = ".sfv";
+    let par2_extension = ".par2";
     let mut renamed_files = 0;
 
     let res = get_files_from_path(path_s);
@@ -213,12 +228,19 @@ fn fix_misnamed_sfv_files(path_s: &String, dry_run: bool, verbose: bool) -> u32 
                 } else {
                     if verbose { println!("Keep {:?} a SFV file", path); }
                 }
+            } else if par2_reader::is_par2(&path) {
+                if !path.ends_with(&par2_extension) {
+                    // rename +.par2
+                    new_path = Some(path.clone() + &par2_extension);
+                } else {
+                    if verbose { println!("Keep {:?} a PAR2 file", path); }
+                }
             } else {
-                if path.ends_with(&sfv_extension) {
+                if path.ends_with(&sfv_extension) || path.ends_with(&par2_extension) {
                     // rename +_not
                     new_path = Some(path.clone() + "_not");
                 } else {
-                    if verbose { println!("Keep {:?} not a SFV file", path); }
+                    if verbose { println!("Keep {:?} not a PAR2/SFV file", path); }
                 }
             }
 
@@ -240,13 +262,16 @@ fn fix_misnamed_sfv_files(path_s: &String, dry_run: bool, verbose: bool) -> u32 
     renamed_files
 }
 
-fn repair_filenames_in_path(source_file_path: &String, destination_file_path: &String, 
-        target_checksums: &Vec<file_verification::ChecksumEntry>, dry_run: bool, verbose: bool) {
+fn repair_filenames(
+        source_checksums: &Vec<file_verification::ChecksumEntry>, 
+        target_checksums: &Vec<file_verification::ChecksumEntry>, 
+        destination_file_path: &String, 
+        dry_run: bool, verbose: bool) {
 
     let dest_path = Path::new(&destination_file_path);
 
-    let recommendations = get_repair_recommendations_by_path(&source_file_path, &target_checksums);
-
+    let recommendations = get_repair_recommendations(&source_checksums, &target_checksums);
+    
     let mut to_do:     Vec<&RenamingRecommendation> = Vec::new();
     let mut push_back: Vec<&RenamingRecommendation> = Vec::new();
 
@@ -300,11 +325,7 @@ fn repair_filenames_in_path(source_file_path: &String, destination_file_path: &S
             println!("Stuck in a renaming loop. {:?} files can not be renamed without having the same name! Abort!", to_do.len());
         }
     }
-}
 
-fn get_repair_recommendations_by_path(source_file_path: &String, target_checksums: &Vec<file_verification::ChecksumEntry>) -> Vec<RenamingRecommendation> {
-    let existing_checksums = get_checksums_from_path(&source_file_path);
-    return get_repair_recommendations(&existing_checksums, &target_checksums);
 }
 
 fn get_repair_recommendations(existing_checksums: &Vec<file_verification::ChecksumEntry>, target_checksums: &Vec<file_verification::ChecksumEntry>) -> Vec<RenamingRecommendation> {

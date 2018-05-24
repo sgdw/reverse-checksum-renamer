@@ -11,6 +11,8 @@ use std::fs::File;
 use utils;
 use file_verification;
 
+const PAR2_MAGIC: &[u8;8] = b"PAR2\0PKT";
+
 const PAR2_PKT_TYPE_FILE_DESC: &[u8;16] = b"PAR 2.0\0FileDesc";
 const PAR2_PKT_TYPE_IFSC: &[u8;16] = b"PAR 2.0\0IFSC\0\0\0\0";
 const PAR2_PKT_TYPE_MAIN: &[u8;16] = b"PAR 2.0\0Main\0\0\0\0";
@@ -106,10 +108,18 @@ impl fmt::Debug for Par2FileDescriptorPacket {
     }
 }
 
-#[derive(Default)] #[derive(Debug)]
+#[derive(Default)]
 struct Par2InputFileSliceChecksumPacket {
     pub file_id: [u8;16],
     // ?*20	{MD5 Hash, CRC32} MD5 Hash and CRC32 pairs for the slices
+}
+
+impl fmt::Debug for Par2InputFileSliceChecksumPacket {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "Par2InputFileSliceChecksumPacket {{ file_id: {} }}", 
+            utils::byte_array_to_hex(&self.file_id),
+        )
+    }
 }
 
 impl fmt::Debug for Par2PacketHead {
@@ -119,10 +129,17 @@ impl fmt::Debug for Par2PacketHead {
             self.len,
             utils::byte_array_to_hex(&self.packet_hash),
             utils::byte_array_to_hex(&self.recovery_set_id),
-            // utils::byte_array_to_hex(&self.packet_type),
-            utils::printable_string_from(&self.packet_type),
+            utils::printable_string_from(&self.packet_type), // utils::byte_array_to_hex(&self.packet_type),
         )
     }
+}
+
+pub fn is_par2(filepath: &String) -> bool {
+    let res = _read_par2(filepath, true);
+    if res.is_ok() {
+        return res.unwrap().valid;
+    }
+    false    
 }
 
 pub fn read_par2(filepath: &String) -> Result<file_verification::ChecksumCatalogFile, std::io::Error> {
@@ -156,8 +173,13 @@ fn _read_par2(filepath: &String, _check_only: bool) -> Result<file_verification:
                 let mut head = head.unwrap();
                 println!("{:?}", head);
 
-                // let to_skip = 0i64 + head.len as i64 - HEAD_LEN_I64;
-                // fh.seek(SeekFrom::Current(to_skip)).unwrap();
+                if &head.magic != PAR2_MAGIC {
+                    sfv_file.valid = false;
+                    break;
+                } else if _check_only {
+                    sfv_file.valid = true;
+                    break;
+                }
 
                 head.packet_body = _parse_par2_packet_body(&head, &mut fh).unwrap();
 
@@ -165,7 +187,7 @@ fn _read_par2(filepath: &String, _check_only: bool) -> Result<file_verification:
                     // NOP
                 } else {
                     println!("{:?}", head.packet_body);
-                }             
+                } 
 
             } else {
                 sfv_file.valid = false;
@@ -229,7 +251,20 @@ fn _parse_par2_packet_body(head: &Par2PacketHead, mut fh: &File) -> Option<Par2P
             Par2PacketTypes::Main(body)
         },
         
-        PAR2_PKT_TYPE_IFSC => Par2PacketTypes::Unknown,
+        PAR2_PKT_TYPE_IFSC => {
+            let mut buffer_vec: Vec<u8> = vec![0;to_skip as usize];
+            
+            buffer_vec.reserve_exact(to_skip as usize);
+            let mut buffer = buffer_vec.as_mut_slice();
+
+            &fh.take(to_skip as u64).read(buffer);
+
+            let mut body = Par2InputFileSliceChecksumPacket {
+                file_id: Default::default()
+            };
+            body.file_id.copy_from_slice(&buffer[0..16]);
+            Par2PacketTypes::InputFileSliceChecksum(body)
+        },
         
         PAR2_PKT_TYPE_FILE_DESC => {
             let mut buffer_vec: Vec<u8> = vec![0;to_skip as usize];
