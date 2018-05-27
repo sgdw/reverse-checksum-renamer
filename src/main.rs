@@ -5,6 +5,7 @@ mod file_verification;
 mod par2_reader;
 mod sfv_reader;
 
+use std::fs;
 use std::env;
 use std::process;
 
@@ -23,11 +24,13 @@ fn main() {
     let mut catalog_files: Vec<String> = Vec::new();
     
     let mut file_to_checksum: Option<String> = None;
-    let mut file_to_check_if_sfv: Option<String> = None;
-    let mut file_to_par2_decode: Option<String> = None;
+    let mut file_to_decode: Option<String> = None;
 
     let mut do_fix_misnamed_catalog_files = false;
     let mut do_show_usage = false;
+
+    let mut group_into_subfolder = false;
+    let mut only_complete_sets = false;
 
     let mut verbose = false;
     let mut dry_run = false;
@@ -51,17 +54,12 @@ fn main() {
                 destination_file_path = Some(args[i+1].to_string());
                 skip = 1;
 
-            } else if args[i] == "--show-par2" || args[i] == "-p" {
+            } else if args[i] == "--show-catalog" {
                 if i >= args.len() { die(&format!("Missing value for '{}' parameter", args[i]), 1); return; }
-                file_to_par2_decode = Some(args[i+1].to_string());
+                file_to_decode = Some(args[i+1].to_string());
                 skip = 1;
 
-            } else if args[i] == "--test-sfv" {
-                if i >= args.len() { die(&format!("Missing value for '{}' parameter", args[i]), 1); return; }
-                file_to_check_if_sfv = Some(args[i+1].to_string());
-                skip = 1;
-
-            } else if args[i] == "--checksum-file" || args[i] == "-c" {
+            } else if args[i] == "--checksum-file" {
                 if i >= args.len() { die(&format!("Missing value for '{}' parameter", args[i]), 1); return; }
                 file_to_checksum = Some(args[i+1].to_string());
                 skip = 1;
@@ -69,6 +67,12 @@ fn main() {
             } else if args[i] == "--fix-catalog-files" || args[i] == "-f" {
                 if i >= args.len() { die(&format!("Missing value for '{}' parameter", args[i]), 1); return; }
                 do_fix_misnamed_catalog_files = true;
+
+            } else if args[i] == "-c" {
+                only_complete_sets = true;
+
+            } else if args[i] == "-g" {
+                group_into_subfolder = true;
 
             } else if args[i] == "-v" {
                 verbose = true;
@@ -99,13 +103,12 @@ fn main() {
         println!("      (--show-par2)");
         println!("  -f  find PAR2/SFV files and rename them");
         println!("      (--fix-catalog-files)");
-        println!("  -c  print checksums of files");
-        println!("      (--checksum-file)");
+        println!("  -c  only complete sets");
+        println!("  -g  group into subfolders");
         println!("  -v  verbose");
         println!("  -d  dry run");
-        println!("");
-        println!("Testing:");
-        println!("  --test-sfv");
+        println!("  --show-catalog   list contents of a catlog file (SFV, PAR2)");
+        println!("  --checksum-file print checksums of a file");
         
         return;
     }
@@ -132,22 +135,22 @@ fn main() {
         println!("");
     }
 
-    if file_to_check_if_sfv.is_some() {
-        let filepath = file_to_check_if_sfv.unwrap();
+    if file_to_decode.is_some() {
+        let filepath = file_to_decode.unwrap();
+
+        let mut catalog_file = par2_reader::read_par2(&filepath);
+        if !catalog_file.is_ok() {
+            catalog_file = sfv_reader::read_sfv(&filepath);
+        }
+
         println!("Checking if '{}' is valid SFV file ...", filepath);
-        let sfv_file = sfv_reader::read_sfv(&filepath);
-        match sfv_file {
-            Ok(_f)  => println!("Valid SFV file"),
+        match catalog_file {
+            Ok(_f)  => {
+                println!("Valid SFV file");
+                println!("{:?}", _f);
+            },
             Err(_e) => println!("File not readable"),
         }        
-    }
-
-    if file_to_par2_decode.is_some() {
-        let filepath = file_to_par2_decode.unwrap();
-        println!("Decoding '{}' ...", filepath);
-        let par2_file = par2_reader::read_par2(&filepath);
-        println!("{:?}", par2_file);
-        return;
     }
 
     if do_fix_misnamed_catalog_files && source_file_path.is_some() {
@@ -204,14 +207,13 @@ fn main() {
         }
 
         if paths_ok {
-            // let mut target_checksums: Vec<file_verification::ChecksumEntry> = Vec::new();
-
             let mut existing_checksums = get_checksums_from_path(&source_file_path.unwrap());
+            let destination_file_path = destination_file_path.unwrap();
 
             for mut catalog in source_catalogs {
-                // catalog.entries.into_iter().for_each(|c| target_checksums.push(c));
 
                 let recommendations = get_repair_recommendations(&mut existing_checksums, &mut catalog.entries);
+                println!("");
                 println!("Recommendations for {}:", catalog.source_file);
                 let mut i = 0;
                 for recommendation in &recommendations {
@@ -219,21 +221,70 @@ fn main() {
                     println!("[{}] {} -> {}", i, recommendation.source_file, recommendation.target_name);
                 }
 
-                println!("Now for the fancy stuff:");
-                for entry in &catalog.entries {
-                    println!("{} state:{}", entry.filename, entry.state);
-                }
+                // println!("Now for the fancy stuff:");
+                // for entry in &catalog.entries {
+                //     println!("{} state:{}", entry.filename, entry.state);
+                // }
 
+                println!("");
                 if catalog_has_missing_files(&catalog) {
                     println!("Catalog {} has missing files!", catalog.source_file);
+                    if only_complete_sets {
+                        println!("Will not process files.");
+                        continue;
+                    }
                 } else {
                     println!("Catalog {} is complete", catalog.source_file);
                 }
 
+                // let mut final_destination_path = Path::new(&destination_file_path);
+                if group_into_subfolder {
+                    let catalog_path = Path::new(&catalog.source_file);
+                    
+                    let mut catalog_filename = String::from(catalog_path.file_name().unwrap().to_str().unwrap());
+                    catalog_filename.push_str("_FILES");
+                    if verbose { println!("Subfolder name {:?}", catalog_filename); }
+
+                    let new_final_destination_path = Path::new(&destination_file_path).join(&catalog_filename);
+
+                    if !new_final_destination_path.exists() {
+                        if dry_run {
+                            println!("Would create directory '{:?}'", 
+                                new_final_destination_path.to_str().ok_or_else(|| "Error showing path").unwrap());
+                        } else {
+                            if fs::create_dir(&new_final_destination_path).is_err() {
+                                println!("Could not create directory '{}'", 
+                                    new_final_destination_path.to_str().ok_or_else(|| "Error showing path").unwrap());
+                            }
+                        }
+                    }
+                    if verbose { println!("Will group into folder {:?}", new_final_destination_path); }
+                    // Path::new(&new_final_destination_path)
+                    repair_filenames(&mut existing_checksums, &mut catalog.entries, &new_final_destination_path, dry_run, verbose);
+
+                } else {
+                    // if verbose { println!("Not grouping results {:?}", final_destination_path); }
+                    // Path::new(&destination_file_path)
+                    let new_final_destination_path = Path::new(&destination_file_path);
+                    if verbose { println!("GAHHH {:?}", new_final_destination_path); }
+                    repair_filenames(&mut existing_checksums, &mut catalog.entries, &new_final_destination_path, dry_run, verbose);
+                };
+
+                // let final_destination_path = if group_into_subfolder {
+                //     let catalog_path = Path::new(&catalog.source_file);
+                //     let mut catalog_filename = String::from(catalog_path.file_name().unwrap().to_str().unwrap());
+                //     catalog_filename.push_str("_FILES");
+                //     let p = Path::new(&destination_file_path);
+                //     let p = p.join(&catalog_filename).as_path();
+                //     p
+                // } else {
+                //     Path::new(&destination_file_path)
+                // };
+
+                // if verbose { println!("GAHHH {:?}", final_destination_path); }
+                // repair_filenames(&mut existing_checksums, &mut catalog.entries, &final_destination_path, dry_run, verbose);
 
             }
-
-            // repair_filenames(&existing_checksums, &target_checksums, &destination_file_path.unwrap(), dry_run, verbose);
         }
     }
 }
@@ -317,11 +368,10 @@ fn catalog_has_missing_files(catalog: &file_verification::ChecksumCatalog) -> bo
     false
 }
 
-#[allow(dead_code)]
 fn repair_filenames(
         mut source_checksums: &mut Vec<file_verification::ChecksumEntry>, 
         mut target_checksums: &mut Vec<file_verification::ChecksumEntry>, 
-        destination_file_path: &String, 
+        destination_file_path: &Path, 
         dry_run: bool, verbose: bool) {
 
     let dest_path = Path::new(&destination_file_path);
