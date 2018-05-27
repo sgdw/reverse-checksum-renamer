@@ -5,9 +5,6 @@ use std::fmt;
 
 use std::io::Read;
 use std::io::Write;
-use std::io::BufRead;
-use std::io::BufReader;
-use std::io::ErrorKind;
 
 use std::fs;
 use std::fs::File;
@@ -19,12 +16,40 @@ use self::crc::{crc32, Hasher32}; // https://docs.rs/crc/1.7.0/crc/index.html
 
 extern crate md5;
 
+use super::par2_reader;
+use super::sfv_reader;
+
+#[derive(PartialEq)]
+pub enum SourceTypes {
+    SFV,
+    PAR2
+}
+
+pub struct ChecksumCatalog {
+    pub entries: Vec<ChecksumEntry>,
+    pub valid: bool,
+    pub complete: bool,
+    pub source_type: SourceTypes,
+    pub source_file: String,
+    pub state: u64,
+}
+
+impl fmt::Debug for ChecksumCatalog {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "ChecksumCatalogFile(entries:{:?}|valid:{:?})", 
+            self.entries,
+            self.valid,
+        )
+    }
+}
+
 pub struct ChecksumEntry {
     pub filename: String,
     pub path: String,
     pub checksum_crc32: Option<u32>,
     pub checksum_md5: Option<[u8; 16]>,
-    pub valid: bool
+    pub valid: bool,
+    pub state: u64,
 }
 
 impl ChecksumEntry {
@@ -34,18 +59,48 @@ impl ChecksumEntry {
             s += &format!("{:02x}", byte);
         }
         s    
-    }    
+    }
+
+    #[allow(dead_code)]
+    pub fn set_state(&mut self, bit: u8) {
+        self.state = self.state | 1 << bit;
+    }
+
+    #[allow(dead_code)]
+    pub fn reset_state(&mut self, bit: u8) {
+        self.state = self.state & !(1 << bit);
+    }
+
+    #[allow(dead_code)]
+    pub fn has_state(&self, bit: u8) -> bool {
+        (self.state & (1 << bit)) == (1 << bit)
+    }
 }
 
 impl fmt::Debug for ChecksumEntry {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "ChecksumEntry(filename:{:?}|path:{:?}|checksum_crc32:{:?}|valid:{:?})", 
+        write!(f, "ChecksumEntry(filename:{:?}|path:{:?}|checksum_crc32:{:?}|checksum_md5:{:?}|valid:{:?})", 
             self.filename,
             self.path,
             self.checksum_crc32,
+            self.checksum_md5_as_str(),
             self.valid,
         )
     }
+}
+
+pub fn get_source_type_by_filename(file: &String) -> Option<SourceTypes> {
+    let sfv_extension  = ".".to_owned() + sfv_reader::EXTENSION;
+    let par2_extension = ".".to_owned() + par2_reader::EXTENSION;
+
+    if file.ends_with(&sfv_extension) {
+        return Some(SourceTypes::SFV);
+    }
+    else if file.ends_with(&par2_extension) {
+        return Some(SourceTypes::PAR2);
+    }
+
+    None
 }
 
 pub fn get_checksum_from_file(file: &String, print_progress: bool) -> Result<ChecksumEntry, std::io::Error> {
@@ -108,126 +163,8 @@ pub fn get_checksum_from_file(file: &String, print_progress: bool) -> Result<Che
         checksum_crc32: Some(digest_crc32.sum32()),
         checksum_md5: Some(digest_md5.0),
         valid: true,
+        state: 0,
     };
 
     Ok(entry)
-}
-
-pub enum SourceTypes {
-    SFV,
-    PAR2
-}
-
-pub struct ChecksumCatalogFile {
-    pub entries: Vec<ChecksumEntry>,
-    pub valid: bool,
-    pub complete: bool,
-    pub source_type: SourceTypes,
-}
-
-impl fmt::Debug for ChecksumCatalogFile {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "ChecksumCatalogFile(entries:{:?}|valid:{:?})", 
-            self.entries,
-            self.valid,
-        )
-    }
-}
-
-pub fn is_sfv(filepath: &String) -> bool {
-    let res = _read_sfv(filepath, true);
-    if res.is_ok() {
-        let sfv = res.unwrap();
-        if sfv.entries.len() == 0 {
-            return false;
-        } else {
-            match sfv.entries.first() {
-                Some(e) => return e.valid,
-                None    => return false,
-            }
-        }
-    }
-    false
-}
-
-pub fn read_sfv(filepath: &String) -> Result<ChecksumCatalogFile, std::io::Error> {
-    return _read_sfv(filepath, false);
-}
-
-fn _read_sfv(filepath: &String, check_only: bool) -> Result<ChecksumCatalogFile, std::io::Error> {
-    let mut sfv_file = ChecksumCatalogFile {
-        valid: true,
-        entries: Vec::new(),
-        complete: false,
-        source_type: SourceTypes::SFV,
-    };
-
-    let fres: Result<File, std::io::Error> = match File::open(filepath) {
-        Ok(v) => Ok(v),
-        Err(_e) => return Err(_e)
-    };
-
-    let fh = fres.unwrap();
-    let file = BufReader::new(&fh);
-    for rline in file.lines() {
-        if rline.is_ok() {
-            let line = rline.unwrap();
-            let entry = parse_sfv_line(&line);
-            if entry.is_some() {
-                sfv_file.entries.push(entry.unwrap());
-                if check_only {
-                    return Ok(sfv_file);
-                }
-            }
-        } else {
-            return Err(std::io::Error::new(ErrorKind::Other, rline.err().unwrap()));
-        }
-    }
-    Ok(sfv_file)
-}
-
-pub fn parse_sfv_line(line_par: &String) -> Option<ChecksumEntry> {
-    let mut entry = ChecksumEntry {
-        filename: String::new(),
-        path: String::new(),
-        checksum_crc32: None,
-        checksum_md5: None,
-        valid: true,
-    };
-
-    let line = line_par.trim();
-    let num_chars = line.chars().count();
-
-    if line.starts_with(';') {
-        return None;
-    }
-
-    let mut checksum = String::new();
-
-    let mut i = 0;
-
-    for c in line.chars().rev() {
-        if c == ' ' || c == '\t' {
-            if i != 8 {
-                entry.valid = false;
-                return Some(entry);                
-            }
-            break;
-        } else {
-            if c >= '0' && c <= '9' || c >= 'a' && c <= 'f' || c >= 'A' && c <= 'F' {
-                checksum.push(c);
-            } else {
-                entry.valid = false;
-                return Some(entry);
-            }
-        }
-        i += 1;
-    }
-
-    checksum = checksum.chars().rev().collect::<String>();
-
-    entry.filename = line_par.chars().take(num_chars-i-1).collect::<String>();
-    entry.checksum_crc32 = Some(u32::from_str_radix(&checksum, 16).unwrap());
-
-    Some(entry)
 }

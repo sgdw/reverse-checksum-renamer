@@ -5,3 +5,4 @@
 pub mod file_verification;
 pub mod utils;
 pub mod par2_reader;
+pub mod sfv_reader;

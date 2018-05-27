@@ -8,8 +8,12 @@ use std::io::{Seek, SeekFrom};
 
 use std::fs::File;
 
+use std::ops::Fn;
+
 use utils;
 use file_verification;
+
+pub const EXTENSION: &str = "par2";
 
 const PAR2_MAGIC: &[u8;8] = b"PAR2\0PKT";
 
@@ -17,6 +21,11 @@ const PAR2_PKT_TYPE_FILE_DESC: &[u8;16] = b"PAR 2.0\0FileDesc";
 const PAR2_PKT_TYPE_IFSC: &[u8;16] = b"PAR 2.0\0IFSC\0\0\0\0";
 const PAR2_PKT_TYPE_MAIN: &[u8;16] = b"PAR 2.0\0Main\0\0\0\0";
 const PAR2_PKT_TYPE_CREATOR: &[u8;16] = b"PAR 2.0\0Creator\0";
+
+static mut VERBOSE: bool = false;
+pub fn set_verbose(is: bool) { unsafe { VERBOSE = is; } }
+pub fn is_verbose() -> bool  { unsafe { return VERBOSE; } }
+pub fn if_verbose(func: &Fn()) { if is_verbose() { func(); } }
 
 enum Par2PacketTypes {
     Unknown,
@@ -142,16 +151,18 @@ pub fn is_par2(filepath: &String) -> bool {
     false    
 }
 
-pub fn read_par2(filepath: &String) -> Result<file_verification::ChecksumCatalogFile, std::io::Error> {
+pub fn read_par2(filepath: &String) -> Result<file_verification::ChecksumCatalog, std::io::Error> {
     return _read_par2(filepath, false);
 }
 
-fn _read_par2(filepath: &String, _check_only: bool) -> Result<file_verification::ChecksumCatalogFile, std::io::Error> {
-    let mut sfv_file = file_verification::ChecksumCatalogFile {
+fn _read_par2(filepath: &String, _check_only: bool) -> Result<file_verification::ChecksumCatalog, std::io::Error> {
+    let mut catalog_file = file_verification::ChecksumCatalog {
         valid: true,
         entries: Vec::new(),
         complete: false,
         source_type: file_verification::SourceTypes::PAR2,
+        source_file: filepath.to_string(),
+        state: 0,
     };
 
     let fres: Result<File, std::io::Error> = match File::open(filepath) {
@@ -171,13 +182,13 @@ fn _read_par2(filepath: &String, _check_only: bool) -> Result<file_verification:
 
             if head.is_some() {
                 let mut head = head.unwrap();
-                println!("{:?}", head);
+                if_verbose(&|| println!("{:?}", head));
 
                 if &head.magic != PAR2_MAGIC {
-                    sfv_file.valid = false;
+                    catalog_file.valid = false;
                     break;
                 } else if _check_only {
-                    sfv_file.valid = true;
+                    catalog_file.valid = true;
                     break;
                 }
 
@@ -185,18 +196,28 @@ fn _read_par2(filepath: &String, _check_only: bool) -> Result<file_verification:
 
                 if let Par2PacketTypes::Unknown = head.packet_body {
                     // NOP
+                } else if let Par2PacketTypes::FileDescriptor(_body) = head.packet_body {
+                    let entry = file_verification::ChecksumEntry {
+                        filename: _body.name_of_file.to_string(),
+                        path: String::new(),
+                        checksum_crc32: None,
+                        checksum_md5: Some(_body.entire_file_md5),
+                        valid: true,
+                        state: 0,
+                    };
+                    catalog_file.entries.push(entry);
                 } else {
-                    println!("{:?}", head.packet_body);
+                    if_verbose(&|| println!("{:?}", head.packet_body));
                 } 
 
             } else {
-                sfv_file.valid = false;
+                catalog_file.valid = false;
                 break;
             }
         }
     }
 
-    Ok(sfv_file)
+    Ok(catalog_file)
 }
 
 fn _parse_par2_packet_head(buffer: &[u8]) -> Option<Par2PacketHead> {
@@ -279,7 +300,7 @@ fn _parse_par2_packet_body(head: &Par2PacketHead, mut fh: &File) -> Option<Par2P
                 entire_file_md5: Default::default(),
                 first_16k_md5: Default::default(),
                 length_of_file: utils::slice_u8_to_u64(&buffer[48..56]),
-                name_of_file: String::from_utf8(buffer[56..(to_skip-1) as usize].to_vec()).unwrap(),
+                name_of_file: String::from_utf8(buffer[56..(to_skip-2) as usize].to_vec()).unwrap(),
             };
             body.file_id.copy_from_slice(&buffer[0..16]);
             body.entire_file_md5.copy_from_slice(&buffer[16..32]);

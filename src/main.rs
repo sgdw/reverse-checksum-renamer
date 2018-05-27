@@ -1,13 +1,16 @@
 // https://doc.rust-lang.org/book/second-edition/ch01-00-introduction.html
 
-mod file_verification;
 mod utils;
+mod file_verification;
 mod par2_reader;
+mod sfv_reader;
 
 use std::env;
 use std::process;
 
 use std::path::{Path, PathBuf};
+
+const STATE_FILE_FOUND: u8 = 0;
 
 fn main() {
     const VERSION_MAJ: u32 = 0;
@@ -48,7 +51,7 @@ fn main() {
                 destination_file_path = Some(args[i+1].to_string());
                 skip = 1;
 
-            } else if args[i] == "--show-par2" {
+            } else if args[i] == "--show-par2" || args[i] == "-p" {
                 if i >= args.len() { die(&format!("Missing value for '{}' parameter", args[i]), 1); return; }
                 file_to_par2_decode = Some(args[i+1].to_string());
                 skip = 1;
@@ -58,12 +61,12 @@ fn main() {
                 file_to_check_if_sfv = Some(args[i+1].to_string());
                 skip = 1;
 
-            } else if args[i] == "--checksum-file" {
+            } else if args[i] == "--checksum-file" || args[i] == "-c" {
                 if i >= args.len() { die(&format!("Missing value for '{}' parameter", args[i]), 1); return; }
                 file_to_checksum = Some(args[i+1].to_string());
                 skip = 1;
 
-            } else if args[i] == "--fix-catalog-files" || args[i] == "--fcf" {
+            } else if args[i] == "--fix-catalog-files" || args[i] == "-f" {
                 if i >= args.len() { die(&format!("Missing value for '{}' parameter", args[i]), 1); return; }
                 do_fix_misnamed_catalog_files = true;
 
@@ -78,28 +81,32 @@ fn main() {
 
             } else {
                 catalog_files.push(args[i].to_string());
-                if verbose { println!("Adding SFV file: {:?}", args[i]); }
+                if verbose { println!("Adding catalog file: {:?}", args[i]); }
             }
         }
     }
 
     if verbose {
         println!("reverse-checksum-renamer V{}.{}", VERSION_MAJ, VERSION_MIN);
+        par2_reader::set_verbose(verbose);
     }
 
     if do_show_usage {
-        println!("Usage: reverse-checksum-renamer [-i <input>] [-o <output>] <SFV files>");
+        println!("Usage: reverse-checksum-renamer [-i <input>] [-o <output>] <SFV/PAR2 files>");
         println!("  -i  input folder");
         println!("  -o  output folder");
-        println!("  --show-par2");
-        println!("        show referenced files in par2");
-        println!("  --fix-catalog-files / --fcf");
-        println!("        find SFV files and rename them");
-        println!("  --checksum-file");
-        println!("        print checksums of files");
-        println!("  --test-sfv");
+        println!("  -p  show referenced files in par2");
+        println!("      (--show-par2)");
+        println!("  -f  find PAR2/SFV files and rename them");
+        println!("      (--fix-catalog-files)");
+        println!("  -c  print checksums of files");
+        println!("      (--checksum-file)");
         println!("  -v  verbose");
         println!("  -d  dry run");
+        println!("");
+        println!("Testing:");
+        println!("  --test-sfv");
+        
         return;
     }
 
@@ -128,7 +135,7 @@ fn main() {
     if file_to_check_if_sfv.is_some() {
         let filepath = file_to_check_if_sfv.unwrap();
         println!("Checking if '{}' is valid SFV file ...", filepath);
-        let sfv_file = file_verification::read_sfv(&filepath);
+        let sfv_file = sfv_reader::read_sfv(&filepath);
         match sfv_file {
             Ok(_f)  => println!("Valid SFV file"),
             Err(_e) => println!("File not readable"),
@@ -150,23 +157,35 @@ fn main() {
                 // from a glob, they might not be the same
     }
 
-    let mut source_catalogs: Vec<file_verification::ChecksumCatalogFile> = Vec::new();
+    let mut source_catalogs: Vec<file_verification::ChecksumCatalog> = Vec::new();
 
     if catalog_files.len() > 0 {
         for catalog_file_path in &catalog_files {
             println!("Reading {:?} ...", catalog_file_path);
-            let sfv_file_result = file_verification::read_sfv(&catalog_file_path);
-            if sfv_file_result.is_ok() {
-                let sfv_file = sfv_file_result.unwrap();
-                println!("{:?} entries found in '{:?}':", sfv_file.entries.len(), catalog_file_path);
-                let mut i = 0;
-                for e in &sfv_file.entries {
-                    i += 1;
-                    println!("[{}] '{}' crc32:{:x}", i, e.filename, e.checksum_crc32.unwrap());
+
+            let src_type = file_verification::get_source_type_by_filename(&catalog_file_path);
+            if src_type.is_some() {
+                
+                let catalog_opt = match src_type.unwrap() {
+                    file_verification::SourceTypes::SFV  => sfv_reader::read_sfv(&catalog_file_path).ok(),
+                    file_verification::SourceTypes::PAR2 => par2_reader::read_par2(&catalog_file_path).ok(),
+                };
+
+                if catalog_opt.is_some() {
+                    let catalog = catalog_opt.unwrap();
+                    println!("{:?} entries found in '{}':", catalog.entries.len(), catalog_file_path);
+                    let mut i = 0;
+                    for e in &catalog.entries {
+                        i += 1;
+                        let str_crc32 = e.checksum_crc32.map_or_else(|| "".to_string(), |v| format!("{:x}", v));
+                        let str_md5   = e.checksum_md5.map_or_else(|| "".to_string(),|v| utils::byte_array_to_hex(&v));
+                        println!("[{}] '{}' crc32:{} md5:{}", i, e.filename, str_crc32, str_md5);
+                    }
+                    println!("");
+                    source_catalogs.push(catalog);
                 }
-                println!("");
-                // sfv_file.entries.into_iter().for_each(|c| target_checksums.push(c));
-                source_catalogs.push(sfv_file);
+            } else {
+                println!("Filetype of {} is not recognized!", &catalog_file_path);
             }
         }
     }
@@ -185,15 +204,36 @@ fn main() {
         }
 
         if paths_ok {
-            let mut target_checksums: Vec<file_verification::ChecksumEntry> = Vec::new();
+            // let mut target_checksums: Vec<file_verification::ChecksumEntry> = Vec::new();
 
-            let existing_checksums = get_checksums_from_path(&source_file_path.unwrap());
+            let mut existing_checksums = get_checksums_from_path(&source_file_path.unwrap());
 
-            for catalog in source_catalogs {
-                catalog.entries.into_iter().for_each(|c| target_checksums.push(c));
+            for mut catalog in source_catalogs {
+                // catalog.entries.into_iter().for_each(|c| target_checksums.push(c));
+
+                let recommendations = get_repair_recommendations(&mut existing_checksums, &mut catalog.entries);
+                println!("Recommendations for {}:", catalog.source_file);
+                let mut i = 0;
+                for recommendation in &recommendations {
+                    i+=1;
+                    println!("[{}] {} -> {}", i, recommendation.source_file, recommendation.target_name);
+                }
+
+                println!("Now for the fancy stuff:");
+                for entry in &catalog.entries {
+                    println!("{} state:{}", entry.filename, entry.state);
+                }
+
+                if catalog_has_missing_files(&catalog) {
+                    println!("Catalog {} has missing files!", catalog.source_file);
+                } else {
+                    println!("Catalog {} is complete", catalog.source_file);
+                }
+
+
             }
 
-            repair_filenames(&existing_checksums, &target_checksums, &destination_file_path.unwrap(), dry_run, verbose);
+            // repair_filenames(&existing_checksums, &target_checksums, &destination_file_path.unwrap(), dry_run, verbose);
         }
     }
 }
@@ -203,15 +243,15 @@ fn die(message: &str, exit_code: i32) {
     process::exit(exit_code);
 }
 
+#[derive(Debug)]
 struct RenamingRecommendation {
     source_file: String,
     target_name: String,
-    checksum_crc32: u32,
 }
 
 fn fix_misnamed_catalog_files(path_s: &String, dry_run: bool, verbose: bool) -> u32 {
-    let sfv_extension = ".sfv";
-    let par2_extension = ".par2";
+    let sfv_extension  = ".".to_owned() + sfv_reader::EXTENSION;
+    let par2_extension = ".".to_owned() + par2_reader::EXTENSION;
     let mut renamed_files = 0;
 
     let res = get_files_from_path(path_s);
@@ -221,7 +261,7 @@ fn fix_misnamed_catalog_files(path_s: &String, dry_run: bool, verbose: bool) -> 
             let path = String::from(file_path.as_path().to_str().unwrap());
             let mut new_path: Option<String> = None;
 
-            if file_verification::is_sfv(&path) {
+            if sfv_reader::is_sfv(&path) {
                 if !path.ends_with(&sfv_extension) {
                     // rename +.sfv
                     new_path = Some(path.clone() + &sfv_extension);
@@ -262,15 +302,31 @@ fn fix_misnamed_catalog_files(path_s: &String, dry_run: bool, verbose: bool) -> 
     renamed_files
 }
 
+fn catalog_has_missing_files(catalog: &file_verification::ChecksumCatalog) -> bool {
+    let ignore = [".nfo", ".txt", ".sfv", ".par2"];
+    for entry in &catalog.entries {
+        for ext in ignore.iter() {
+            if entry.filename.ends_with(ext) {
+                continue;
+            }
+        }
+        if !entry.has_state(STATE_FILE_FOUND) {
+            return true;
+        }
+    }
+    false
+}
+
+#[allow(dead_code)]
 fn repair_filenames(
-        source_checksums: &Vec<file_verification::ChecksumEntry>, 
-        target_checksums: &Vec<file_verification::ChecksumEntry>, 
+        mut source_checksums: &mut Vec<file_verification::ChecksumEntry>, 
+        mut target_checksums: &mut Vec<file_verification::ChecksumEntry>, 
         destination_file_path: &String, 
         dry_run: bool, verbose: bool) {
 
     let dest_path = Path::new(&destination_file_path);
 
-    let recommendations = get_repair_recommendations(&source_checksums, &target_checksums);
+    let recommendations = get_repair_recommendations(&mut source_checksums, &mut target_checksums);
     
     let mut to_do:     Vec<&RenamingRecommendation> = Vec::new();
     let mut push_back: Vec<&RenamingRecommendation> = Vec::new();
@@ -284,8 +340,8 @@ fn repair_filenames(
 
         for recommendation in &to_do {
             if verbose {
-                println!("Recommend renaming '{}' to '{}' because of matching checksum crc32:{:x}",
-                    recommendation.source_file, recommendation.target_name, recommendation.checksum_crc32);
+                println!("Recommend renaming '{}' to '{}'",
+                    recommendation.source_file, recommendation.target_name);
             }
 
             let src = Path::new(&recommendation.source_file);
@@ -328,16 +384,24 @@ fn repair_filenames(
 
 }
 
-fn get_repair_recommendations(existing_checksums: &Vec<file_verification::ChecksumEntry>, target_checksums: &Vec<file_verification::ChecksumEntry>) -> Vec<RenamingRecommendation> {
+fn get_repair_recommendations(existing_checksums: &mut Vec<file_verification::ChecksumEntry>, target_checksums: &mut Vec<file_verification::ChecksumEntry>) -> Vec<RenamingRecommendation> {
     let mut recommendations: Vec<RenamingRecommendation> = Vec::new();
-    for ecs in existing_checksums {
-        for tcs in target_checksums {
-            if tcs.valid && tcs.checksum_crc32 == ecs.checksum_crc32 {
-                recommendations.push(RenamingRecommendation {
-                    source_file: ecs.path.clone(),
-                    target_name: tcs.filename.clone(),
-                    checksum_crc32: ecs.checksum_crc32.unwrap(),
-                });
+
+    for mut ecs in existing_checksums.iter_mut() {
+        for mut tcs in target_checksums.iter_mut() {
+
+            if tcs.valid {
+                let crc32_matches = tcs.checksum_crc32.is_some() && ecs.checksum_crc32.is_some() && tcs.checksum_crc32 == ecs.checksum_crc32;
+                let md5_matches   = tcs.checksum_md5.is_some()   && ecs.checksum_md5.is_some()   && tcs.checksum_md5 == ecs.checksum_md5;
+
+                if crc32_matches || md5_matches {
+                    recommendations.push(RenamingRecommendation {
+                        source_file: ecs.path.clone(),
+                        target_name: tcs.filename.clone(),
+                    });
+                    ecs.set_state(STATE_FILE_FOUND);
+                    tcs.set_state(STATE_FILE_FOUND);
+                }
             }
         }
     }
