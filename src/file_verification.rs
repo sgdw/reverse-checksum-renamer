@@ -25,6 +25,16 @@ pub enum SourceTypes {
     PAR2
 }
 
+impl fmt::Display for SourceTypes {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            &SourceTypes::SFV => write!(f, "SFV"),
+            &SourceTypes::PAR2 => write!(f, "PAR2"),
+        }
+        
+    }
+}
+
 pub struct ChecksumCatalog {
     pub entries: Vec<ChecksumEntry>,
     pub valid: bool,

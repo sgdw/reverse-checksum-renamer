@@ -54,7 +54,7 @@ fn main() {
                 destination_file_path = Some(args[i+1].to_string());
                 skip = 1;
 
-            } else if args[i] == "--show-catalog" {
+            } else if args[i] == "--show-catalog" || args[i] == "-p" {
                 if i >= args.len() { die(&format!("Missing value for '{}' parameter", args[i]), 1); return; }
                 file_to_decode = Some(args[i+1].to_string());
                 skip = 1;
@@ -99,15 +99,14 @@ fn main() {
         println!("Usage: reverse-checksum-renamer [-i <input>] [-o <output>] <SFV/PAR2 files>");
         println!("  -i  input folder");
         println!("  -o  output folder");
-        println!("  -p  show referenced files in par2");
-        println!("      (--show-par2)");
+        println!("  -p  show referenced files in par2 or sfv file");
+        println!("      (--show-catalog)");
         println!("  -f  find PAR2/SFV files and rename them");
         println!("      (--fix-catalog-files)");
         println!("  -c  only complete sets");
         println!("  -g  group into subfolders");
         println!("  -v  verbose");
         println!("  -d  dry run");
-        println!("  --show-catalog   list contents of a catlog file (SFV, PAR2)");
         println!("  --checksum-file print checksums of a file");
         
         return;
@@ -138,19 +137,31 @@ fn main() {
     if file_to_decode.is_some() {
         let filepath = file_to_decode.unwrap();
 
-        let mut catalog_file = par2_reader::read_par2(&filepath);
-        if !catalog_file.is_ok() {
-            catalog_file = sfv_reader::read_sfv(&filepath);
+        #[allow(unused_assignments)]
+        let mut catalog_file: Option<file_verification::ChecksumCatalog> = None;
+        
+        catalog_file = match par2_reader::read_par2(&filepath) {
+            Ok(_cf) => if _cf.valid { Some(_cf) } else { None },
+            Err(_e) => None
+        };
+
+        if catalog_file.is_none() {
+            catalog_file = match sfv_reader::read_sfv(&filepath) {
+                Ok(_cf) => if _cf.valid { Some(_cf) } else { None },
+                Err(_e) => None
+            };
+
         }
 
-        println!("Checking if '{}' is valid SFV file ...", filepath);
-        match catalog_file {
-            Ok(_f)  => {
-                println!("Valid SFV file");
-                println!("{:?}", _f);
-            },
-            Err(_e) => println!("File not readable"),
-        }        
+        if catalog_file.is_none() {
+            println!("Not a valid catalog file");
+        } else {
+            let catalog_file = catalog_file.unwrap();
+            println!("Valid {} file having {} file references:", catalog_file.source_type, catalog_file.entries.len());
+            for (i, entry) in catalog_file.entries.iter().enumerate() {
+                println!("[{}] {:?}", i, entry.filename);
+            }
+        }
     }
 
     if do_fix_misnamed_catalog_files && source_file_path.is_some() {
@@ -221,11 +232,6 @@ fn main() {
                     println!("[{}] {} -> {}", i, recommendation.source_file, recommendation.target_name);
                 }
 
-                // println!("Now for the fancy stuff:");
-                // for entry in &catalog.entries {
-                //     println!("{} state:{}", entry.filename, entry.state);
-                // }
-
                 println!("");
                 if catalog_has_missing_files(&catalog) {
                     println!("Catalog {} has missing files!", catalog.source_file);
@@ -270,20 +276,6 @@ fn main() {
                     repair_filenames(&mut existing_checksums, &mut catalog.entries, &new_final_destination_path, dry_run, verbose);
                 };
 
-                // let final_destination_path = if group_into_subfolder {
-                //     let catalog_path = Path::new(&catalog.source_file);
-                //     let mut catalog_filename = String::from(catalog_path.file_name().unwrap().to_str().unwrap());
-                //     catalog_filename.push_str("_FILES");
-                //     let p = Path::new(&destination_file_path);
-                //     let p = p.join(&catalog_filename).as_path();
-                //     p
-                // } else {
-                //     Path::new(&destination_file_path)
-                // };
-
-                // if verbose { println!("GAHHH {:?}", final_destination_path); }
-                // repair_filenames(&mut existing_checksums, &mut catalog.entries, &final_destination_path, dry_run, verbose);
-
             }
         }
     }
@@ -311,6 +303,8 @@ fn fix_misnamed_catalog_files(path_s: &String, dry_run: bool, verbose: bool) -> 
             
             let path = String::from(file_path.as_path().to_str().unwrap());
             let mut new_path: Option<String> = None;
+
+            if verbose { println!("Checking '{}' ...", &path); }
 
             if sfv_reader::is_sfv(&path) {
                 if !path.ends_with(&sfv_extension) {
@@ -354,7 +348,7 @@ fn fix_misnamed_catalog_files(path_s: &String, dry_run: bool, verbose: bool) -> 
 }
 
 fn catalog_has_missing_files(catalog: &file_verification::ChecksumCatalog) -> bool {
-    let ignore = [".nfo", ".txt", ".sfv", ".par2"];
+    let ignore = [".nfo", ".txt", ".srr", ".sfv", ".par2"];
     for entry in &catalog.entries {
         for ext in ignore.iter() {
             if entry.filename.ends_with(ext) {
@@ -372,12 +366,23 @@ fn repair_filenames(
         mut source_checksums: &mut Vec<file_verification::ChecksumEntry>, 
         mut target_checksums: &mut Vec<file_verification::ChecksumEntry>, 
         destination_file_path: &Path, 
-        dry_run: bool, verbose: bool) {
+        dry_run: bool, verbose: bool,
+        // only_complete_set: bool
+        ) -> bool {
 
     let dest_path = Path::new(&destination_file_path);
 
     let recommendations = get_repair_recommendations(&mut source_checksums, &mut target_checksums);
     
+    // if only_complete_set {
+    //     for recommendation in &recommendations {
+    //         let src = Path::new(&recommendation.source_file);
+    //         if !src.exists() {
+    //             return false;
+    //         }
+    //     }
+    // }
+
     let mut to_do:     Vec<&RenamingRecommendation> = Vec::new();
     let mut push_back: Vec<&RenamingRecommendation> = Vec::new();
 
@@ -410,7 +415,11 @@ fn repair_filenames(
                 rename_count += 1;
                 if !dry_run {
                     println!("Renaming {:?} to {:?} ...", src.to_str(), dst.as_path().to_str());
-                    std::fs::rename(src, dst).expect("Renaming failed!");
+                    if src.exists() {
+                        std::fs::rename(src, dst).expect("Renaming failed!");
+                    } else {
+                        println!("Not renaming {:?}. File not found!", src.to_str());
+                    }
                 } else {
                     println!("[dry run] Will rename {:?} to {:?}!",
                         src.to_str().unwrap(),
@@ -431,7 +440,7 @@ fn repair_filenames(
             println!("Stuck in a renaming loop. {:?} files can not be renamed without having the same name! Abort!", to_do.len());
         }
     }
-
+    true
 }
 
 fn get_repair_recommendations(existing_checksums: &mut Vec<file_verification::ChecksumEntry>, target_checksums: &mut Vec<file_verification::ChecksumEntry>) -> Vec<RenamingRecommendation> {
@@ -461,10 +470,11 @@ fn get_repair_recommendations(existing_checksums: &mut Vec<file_verification::Ch
 fn get_checksums_from_path(source_file_path: &String) -> Vec<file_verification::ChecksumEntry> {
     let existing_files = get_files_from_path(&source_file_path).unwrap();
     let mut existing_checksums: Vec<file_verification::ChecksumEntry> = Vec::new();
+    let num_files = existing_files.len();
 
-    for existing_file in existing_files {
+    for (i, existing_file) in existing_files.iter().enumerate() {
         let path = String::from(existing_file.as_path().to_str().unwrap());
-        println!("Checking file '{}' ...", path);
+        println!("[{} of {}] Checking file '{}' ...", i+1, num_files, path);
         let csf = file_verification::get_checksum_from_file(&path, true).unwrap();
         existing_checksums.push(csf);
     }

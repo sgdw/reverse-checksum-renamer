@@ -107,8 +107,11 @@ pub fn parse_sfv_line(line_par: &String) -> Option<file_verification::ChecksumEn
 
     checksum = checksum.chars().rev().collect::<String>();
 
-    entry.filename = line_par.chars().take(num_chars-i-1).collect::<String>();
-    entry.checksum_crc32 = Some(u32::from_str_radix(&checksum, 16).unwrap());
+    // println!("num_chars:{} i:{}", num_chars, i);
+    if num_chars > i && num_chars > 0 && i > 0 {
+        entry.filename = line_par.chars().take(num_chars-i-1).collect::<String>();
+        entry.checksum_crc32 = Some(u32::from_str_radix(&checksum, 16).unwrap());
+    }
 
     Some(entry)
 }

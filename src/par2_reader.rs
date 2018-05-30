@@ -171,6 +171,7 @@ fn _read_par2(filepath: &String, _check_only: bool) -> Result<file_verification:
     };
 
     let mut buf_head: [u8; HEAD_LEN] = [0; HEAD_LEN];
+    let mut file_ids: Vec<[u8;16]> = Vec::new();
 
     if fres.is_ok() {
         let mut fh = fres.unwrap();
@@ -178,6 +179,10 @@ fn _read_par2(filepath: &String, _check_only: bool) -> Result<file_verification:
         loop {
             let bytes = fh.read(&mut buf_head)?;
             if bytes == 0 { break; }
+            if bytes < HEAD_LEN_I64 as usize {
+                    catalog_file.valid = false;
+                    break;
+            }
             let head = _parse_par2_packet_head(&buf_head[0..bytes]);
 
             if head.is_some() {
@@ -205,7 +210,14 @@ fn _read_par2(filepath: &String, _check_only: bool) -> Result<file_verification:
                         valid: true,
                         state: 0,
                     };
-                    catalog_file.entries.push(entry);
+
+                    if !file_ids.contains(&_body.file_id) {
+                        file_ids.push(_body.file_id);
+                        catalog_file.entries.push(entry);
+                    }
+
+                    if_verbose(&|| println!("{:?}", _body));
+
                 } else {
                     if_verbose(&|| println!("{:?}", head.packet_body));
                 } 
@@ -295,12 +307,18 @@ fn _parse_par2_packet_body(head: &Par2PacketHead, mut fh: &File) -> Option<Par2P
 
             &fh.take(to_skip as u64).read(buffer);
 
+            let filename = String::from_utf8(buffer[56..(to_skip-1) as usize].to_vec()).unwrap()
+                            .trim_right_matches('\u{0}')
+                            .to_string();
+            // filename.retain(|c| c != '\u{0}');
+
             let mut body = Par2FileDescriptorPacket {
                 file_id: Default::default(),
                 entire_file_md5: Default::default(),
                 first_16k_md5: Default::default(),
                 length_of_file: utils::slice_u8_to_u64(&buffer[48..56]),
-                name_of_file: String::from_utf8(buffer[56..(to_skip-2) as usize].to_vec()).unwrap(),
+                name_of_file: filename
+                ,
             };
             body.file_id.copy_from_slice(&buffer[0..16]);
             body.entire_file_md5.copy_from_slice(&buffer[16..32]);
