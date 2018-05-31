@@ -12,10 +12,12 @@ use std::process;
 use std::path::{Path, PathBuf};
 
 const STATE_FILE_FOUND: u8 = 0;
+const IGNORE_EXTENSIONS: &[&str] = &[".nfo", ".txt", ".srr", ".sfv", ".par2"];
+
+const VERSION_MAJ: u32 = 0;
+const VERSION_MIN: u32 = 1;
 
 fn main() {
-    const VERSION_MAJ: u32 = 0;
-    const VERSION_MIN: u32 = 1;
 
     let args: Vec<_> = env::args().collect();
 
@@ -150,7 +152,6 @@ fn main() {
                 Ok(_cf) => if _cf.valid { Some(_cf) } else { None },
                 Err(_e) => None
             };
-
         }
 
         if catalog_file.is_none() {
@@ -233,6 +234,7 @@ fn main() {
                 }
 
                 println!("");
+                update_catalog_file_status(&mut catalog);
                 if catalog_has_missing_files(&catalog) {
                     println!("Catalog {} has missing files!", catalog.source_file);
                     if only_complete_sets {
@@ -243,39 +245,39 @@ fn main() {
                     println!("Catalog {} is complete", catalog.source_file);
                 }
 
-                // let mut final_destination_path = Path::new(&destination_file_path);
+                let catalog_path = Path::new(&catalog.source_file);
+                let mut final_destination_path = PathBuf::new();
+                final_destination_path.push(&destination_file_path);
+
                 if group_into_subfolder {
-                    let catalog_path = Path::new(&catalog.source_file);
-                    
                     let mut catalog_filename = String::from(catalog_path.file_name().unwrap().to_str().unwrap());
                     catalog_filename.push_str("_FILES");
                     if verbose { println!("Subfolder name {:?}", catalog_filename); }
 
-                    let new_final_destination_path = Path::new(&destination_file_path).join(&catalog_filename);
+                    final_destination_path = final_destination_path.join(&catalog_filename);
 
-                    if !new_final_destination_path.exists() {
+                    if !final_destination_path.exists() {
                         if dry_run {
                             println!("Would create directory '{:?}'", 
-                                new_final_destination_path.to_str().ok_or_else(|| "Error showing path").unwrap());
+                                final_destination_path.to_str().ok_or_else(|| "Error showing path").unwrap());
                         } else {
-                            if fs::create_dir(&new_final_destination_path).is_err() {
+                            if fs::create_dir(&final_destination_path).is_err() {
                                 println!("Could not create directory '{}'", 
-                                    new_final_destination_path.to_str().ok_or_else(|| "Error showing path").unwrap());
+                                    final_destination_path.to_str().ok_or_else(|| "Error showing path").unwrap());
                             }
                         }
                     }
-                    if verbose { println!("Will group into folder {:?}", new_final_destination_path); }
-                    // Path::new(&new_final_destination_path)
-                    repair_filenames(&mut existing_checksums, &mut catalog.entries, &new_final_destination_path, dry_run, verbose);
-
-                } else {
-                    // if verbose { println!("Not grouping results {:?}", final_destination_path); }
-                    // Path::new(&destination_file_path)
-                    let new_final_destination_path = Path::new(&destination_file_path);
-                    if verbose { println!("GAHHH {:?}", new_final_destination_path); }
-                    repair_filenames(&mut existing_checksums, &mut catalog.entries, &new_final_destination_path, dry_run, verbose);
+                    if verbose { println!("Will group into folder {:?}", final_destination_path); }
                 };
 
+                repair_filenames(&mut existing_checksums, &mut catalog.entries, &final_destination_path, dry_run, verbose);
+
+                // Move catalog file to destination                
+                let dst_catalog_path = final_destination_path.join(catalog_path.file_name().unwrap());
+                if catalog_path != dst_catalog_path {
+                    print!("{:?} -> {:?}", catalog_path, dst_catalog_path);
+                    std::fs::rename(catalog_path, dst_catalog_path).expect("Moving of catalog failed!");
+                }
             }
         }
     }
@@ -348,9 +350,8 @@ fn fix_misnamed_catalog_files(path_s: &String, dry_run: bool, verbose: bool) -> 
 }
 
 fn catalog_has_missing_files(catalog: &file_verification::ChecksumCatalog) -> bool {
-    let ignore = [".nfo", ".txt", ".srr", ".sfv", ".par2"];
     for entry in &catalog.entries {
-        for ext in ignore.iter() {
+        for ext in IGNORE_EXTENSIONS.iter() {
             if entry.filename.ends_with(ext) {
                 continue;
             }
@@ -360,6 +361,20 @@ fn catalog_has_missing_files(catalog: &file_verification::ChecksumCatalog) -> bo
         }
     }
     false
+}
+
+fn update_catalog_file_status(catalog: &mut file_verification::ChecksumCatalog) {
+    update_file_status(&mut catalog.entries);
+}
+
+fn update_file_status(entries: &mut Vec<file_verification::ChecksumEntry>) {
+    for mut entry in entries.iter_mut() {
+        let mut path = PathBuf::new();
+        path.push(&entry.filename);
+        if path.exists() {
+            entry.set_state(STATE_FILE_FOUND);
+        }
+    }
 }
 
 fn repair_filenames(
@@ -374,15 +389,6 @@ fn repair_filenames(
 
     let recommendations = get_repair_recommendations(&mut source_checksums, &mut target_checksums);
     
-    // if only_complete_set {
-    //     for recommendation in &recommendations {
-    //         let src = Path::new(&recommendation.source_file);
-    //         if !src.exists() {
-    //             return false;
-    //         }
-    //     }
-    // }
-
     let mut to_do:     Vec<&RenamingRecommendation> = Vec::new();
     let mut push_back: Vec<&RenamingRecommendation> = Vec::new();
 

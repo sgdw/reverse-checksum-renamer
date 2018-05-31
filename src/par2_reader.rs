@@ -307,7 +307,7 @@ fn _parse_par2_packet_body(head: &Par2PacketHead, mut fh: &File) -> Option<Par2P
 
             &fh.take(to_skip as u64).read(buffer);
 
-            let filename = String::from_utf8(buffer[56..(to_skip-1) as usize].to_vec()).unwrap()
+            let filename = String::from_utf8(buffer[56..(to_skip) as usize].to_vec()).unwrap()
                             .trim_right_matches('\u{0}')
                             .to_string();
             // filename.retain(|c| c != '\u{0}');
