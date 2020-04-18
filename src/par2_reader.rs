@@ -25,7 +25,7 @@ const PAR2_PKT_TYPE_CREATOR: &[u8;16] = b"PAR 2.0\0Creator\0";
 static mut VERBOSE: bool = false;
 pub fn set_verbose(is: bool) { unsafe { VERBOSE = is; } }
 pub fn is_verbose() -> bool  { unsafe { return VERBOSE; } }
-pub fn if_verbose(func: &Fn()) { if is_verbose() { func(); } }
+pub fn if_verbose(func: &dyn Fn()) { if is_verbose() { func(); } }
 
 enum Par2PacketTypes {
     Unknown,
@@ -272,11 +272,11 @@ fn _parse_par2_packet_body(head: &Par2PacketHead, mut fh: &File) -> Option<Par2P
             let mut buffer_vec: Vec<u8> = vec![0;to_skip as usize];
 
             buffer_vec.reserve_exact(to_skip as usize);
-            let mut buffer = buffer_vec.as_mut_slice();
+            let buffer = buffer_vec.as_mut_slice();
 
             &fh.take(to_skip as u64).read(buffer);
 
-            let mut body = Par2MainPacket {
+            let body = Par2MainPacket {
                 slice_size: utils::slice_u8_to_u64(&buffer[0..8]),
                 number_of_files: utils::slice_u8_to_u32(&buffer[8..12]),
             };
@@ -288,7 +288,7 @@ fn _parse_par2_packet_body(head: &Par2PacketHead, mut fh: &File) -> Option<Par2P
             let mut buffer_vec: Vec<u8> = vec![0;to_skip as usize];
             
             buffer_vec.reserve_exact(to_skip as usize);
-            let mut buffer = buffer_vec.as_mut_slice();
+            let buffer = buffer_vec.as_mut_slice();
 
             &fh.take(to_skip as u64).read(buffer);
 
@@ -303,12 +303,12 @@ fn _parse_par2_packet_body(head: &Par2PacketHead, mut fh: &File) -> Option<Par2P
             let mut buffer_vec: Vec<u8> = vec![0;to_skip as usize];
 
             buffer_vec.reserve_exact(to_skip as usize);
-            let mut buffer = buffer_vec.as_mut_slice();
+            let buffer = buffer_vec.as_mut_slice();
 
             &fh.take(to_skip as u64).read(buffer);
 
             let filename = String::from_utf8(buffer[56..(to_skip) as usize].to_vec()).unwrap()
-                            .trim_right_matches('\u{0}')
+                            .trim_end_matches('\u{0}') // was: 'trim_right_matches'
                             .to_string();
             // filename.retain(|c| c != '\u{0}');
 

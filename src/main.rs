@@ -368,7 +368,7 @@ fn update_catalog_file_status(catalog: &mut file_verification::ChecksumCatalog) 
 }
 
 fn update_file_status(entries: &mut Vec<file_verification::ChecksumEntry>) {
-    for mut entry in entries.iter_mut() {
+    for entry in entries.iter_mut() {
         let mut path = PathBuf::new();
         path.push(&entry.filename);
         if path.exists() {
@@ -452,8 +452,8 @@ fn repair_filenames(
 fn get_repair_recommendations(existing_checksums: &mut Vec<file_verification::ChecksumEntry>, target_checksums: &mut Vec<file_verification::ChecksumEntry>) -> Vec<RenamingRecommendation> {
     let mut recommendations: Vec<RenamingRecommendation> = Vec::new();
 
-    for mut ecs in existing_checksums.iter_mut() {
-        for mut tcs in target_checksums.iter_mut() {
+    for ecs in existing_checksums.iter_mut() {
+        for tcs in target_checksums.iter_mut() {
 
             if tcs.valid {
                 let crc32_matches = tcs.checksum_crc32.is_some() && ecs.checksum_crc32.is_some() && tcs.checksum_crc32 == ecs.checksum_crc32;
@@ -489,7 +489,7 @@ fn get_checksums_from_path(source_file_path: &String) -> Vec<file_verification::
 
 fn get_files_from_path(path_s: &String) -> Result<Vec<PathBuf>, std::io::Error> {
     let path = Path::new(path_s);
-    let paths = try!(std::fs::read_dir(path));
+    let paths = std::fs::read_dir(path)?;
 
     // Warum funktioniert das nicht ... ?
     // paths.into_iter()
