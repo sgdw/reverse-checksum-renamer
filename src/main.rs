@@ -1,4 +1,19 @@
-// https://doc.rust-lang.org/book/second-edition/ch01-00-introduction.html
+// reverse-checksum-renamer
+// 
+// Copyright (C) 2020  Martin Feil aka. SGDW
+// 
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+// 
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+// 
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <http://www.gnu.org/licenses/>
 
 mod utils;
 mod file_verification;
@@ -36,10 +51,12 @@ fn main() {
     let mut do_fix_misnamed_catalog_files = false;
     let mut do_show_usage = false;
 
-    let mut group_into_subfolder = false;
+    let mut group_into_subdirectory = false;
     let mut only_complete_sets = false;
 
     let mut parallel = false;
+    let mut dop: Option<usize> = None;
+
     let mut verbose = false;
     let mut dry_run = false;
 
@@ -53,34 +70,34 @@ fn main() {
             skip = skip - 1;
         } else {
             if args[i] == "-i" {
-                if i >= args.len() { die(&format!("Missing value for '{}' parameter", args[i]), 1); return; }
+                assert_or_die_if_missing_par(&args, i);
                 source_file_path = Some(args[i+1].to_string());
                 skip = 1;
 
             } else if args[i] == "-o" {
-                if i >= args.len() { die(&format!("Missing value for '{}' parameter", args[i]), 1); return; }
+                assert_or_die_if_missing_par(&args, i);
                 destination_file_path = Some(args[i+1].to_string());
                 skip = 1;
 
             } else if args[i] == "--show-catalog" || args[i] == "-p" {
-                if i >= args.len() { die(&format!("Missing value for '{}' parameter", args[i]), 1); return; }
+                assert_or_die_if_missing_par(&args, i);
                 file_to_decode = Some(args[i+1].to_string());
                 skip = 1;
 
             } else if args[i] == "--checksum-file" {
-                if i >= args.len() { die(&format!("Missing value for '{}' parameter", args[i]), 1); return; }
+                assert_or_die_if_missing_par(&args, i);
                 file_to_checksum = Some(args[i+1].to_string());
                 skip = 1;
 
             } else if args[i] == "--fix-catalog-files" || args[i] == "-f" {
-                if i >= args.len() { die(&format!("Missing value for '{}' parameter", args[i]), 1); return; }
+                assert_or_die_if_missing_par(&args, i);
                 do_fix_misnamed_catalog_files = true;
 
             } else if args[i] == "-c" {
                 only_complete_sets = true;
 
             } else if args[i] == "-g" {
-                group_into_subfolder = true;
+                group_into_subdirectory = true;
 
             } else if args[i] == "-v" {
                 verbose = true;
@@ -88,8 +105,11 @@ fn main() {
             } else if args[i] == "-d" {
                 dry_run = true;
 
-            } else if args[i] == "--parallel" {
-                parallel = true;
+            } else if args[i] == "--degree-of-parallelism" || args[i] == "-p" {
+                assert_or_die_if_missing_par(&args, i);
+                dop = Some(args[i+1].to_string().parse::<usize>().unwrap());
+                skip = 1;
+                parallel = (dop.unwrap() > 1) || (dop.unwrap() == 0);
 
             } else if args[i] == "--help" {
                 do_show_usage = true;
@@ -108,17 +128,20 @@ fn main() {
 
     if do_show_usage {
         println!("Usage: reverse-checksum-renamer [-i <input>] [-o <output>] <SFV/PAR2 files>");
-        println!("  -i  input folder");
-        println!("  -o  output folder");
+        println!("  -i  input directory");
+        println!("  -o  output directory");
         println!("  -p  show referenced files in par2 or sfv file");
         println!("      (--show-catalog)");
         println!("  -f  find PAR2/SFV files and rename them");
         println!("      (--fix-catalog-files)");
         println!("  -c  only complete sets");
-        println!("  -g  group into subfolders");
+        println!("  -g  group into subdirectories");
         println!("  -v  verbose");
         println!("  -d  dry run");
-        println!("  --checksum-file print checksums of a file");
+        println!("  --degree-of-parallelism <number>");
+        println!("      maximum concurrent threads to calculate checksumes of files (0 is number of cores)");
+        println!("  --checksum-file <file>");
+        println!("      print checksums of a file");
         
         return;
     }
@@ -230,7 +253,7 @@ fn main() {
         if paths_ok {
             let mut existing_checksums;
             if parallel {
-                existing_checksums = parallel_get_checksums_from_path(&source_file_path.unwrap());
+                existing_checksums = parallel_get_checksums_from_path(&source_file_path.unwrap(), dop);
             } else {
                 existing_checksums = get_checksums_from_path(&source_file_path.unwrap());
             }
@@ -264,10 +287,10 @@ fn main() {
                 let mut final_destination_path = PathBuf::new();
                 final_destination_path.push(&destination_file_path);
 
-                if group_into_subfolder {
+                if group_into_subdirectory {
                     let mut catalog_filename = String::from(catalog_path.file_name().unwrap().to_str().unwrap());
                     catalog_filename.push_str("_FILES");
-                    if verbose { println!("Subfolder name {:?}", catalog_filename); }
+                    if verbose { println!("Subdirectory name {:?}", catalog_filename); }
 
                     final_destination_path = final_destination_path.join(&catalog_filename);
 
@@ -282,7 +305,7 @@ fn main() {
                             }
                         }
                     }
-                    if verbose { println!("Will group into folder {:?}", final_destination_path); }
+                    if verbose { println!("Will group into directory {:?}", final_destination_path); }
                 };
 
                 repair_filenames(&mut existing_checksums, &mut catalog.entries, &final_destination_path, dry_run, verbose);
@@ -298,8 +321,13 @@ fn main() {
     }
 }
 
+fn assert_or_die_if_missing_par(args: &Vec<std::string::String>, i: usize) {
+    let has_one_more_par = (i+1) < args.len();
+    if !has_one_more_par { die(&format!("Missing value for parameter '{}'", args[i]), 1); return; }
+}
+
 fn die(message: &str, exit_code: i32) {
-    println!("{:?}", message);
+    println!("{}", message);
     process::exit(exit_code);
 }
 
@@ -490,8 +518,8 @@ fn get_repair_recommendations(existing_checksums: &mut Vec<file_verification::Ch
 
 fn get_checksums_from_path(source_file_path: &String) -> Vec<file_verification::ChecksumEntry> {
     let existing_files = get_files_from_path(&source_file_path).unwrap();
-    let mut existing_checksums: Vec<file_verification::ChecksumEntry> = Vec::new();
     let num_files = existing_files.len();
+    let mut existing_checksums: Vec<file_verification::ChecksumEntry> = Vec::new();
 
     for (i, existing_file) in existing_files.iter().enumerate() {
         let path = String::from(existing_file.as_path().to_str().unwrap());
@@ -502,20 +530,26 @@ fn get_checksums_from_path(source_file_path: &String) -> Vec<file_verification::
     existing_checksums
 }
 
-// maybe use: https://docs.rs/threadpool/1.7.1/threadpool/
+// Alternative parallel libs: 
+// https://docs.rs/threadpool/1.7.1/threadpool/
 // https://docs.rs/rayon/1.3.0/rayon/
 
-fn parallel_get_checksums_from_path(source_file_path: &String) -> Vec<file_verification::ChecksumEntry> {
+fn parallel_get_checksums_from_path(source_file_path: &String, dop: Option<usize>) -> Vec<file_verification::ChecksumEntry> {
     let existing_files = get_files_from_path(&source_file_path).unwrap();
-    let mut existing_checksums: Vec<file_verification::ChecksumEntry> = Vec::new();
     let num_files = existing_files.len();
+    let mut existing_checksums: Vec<file_verification::ChecksumEntry> = Vec::new();
 
     let mut handles: Vec<thread::JoinHandle<Vec<file_verification::ChecksumEntry>>> = Vec::new();
     let next_file_index = Arc::new(AtomicUsize::new(0));
     let count_files_finished = Arc::new(AtomicUsize::new(0));
     let arc_existing_files = Arc::new(existing_files);
 
-    for _i in 0..num_cpus::get() {
+    let dop = match dop {
+        Some(ref _v) => dop.unwrap(),
+        None => num_cpus::get()
+    };
+
+    for _i in 0..dop {
         let next_file_index = next_file_index.clone();
         let count_files_finished = count_files_finished.clone();
         let arc_existing_files = arc_existing_files.clone();
@@ -541,8 +575,8 @@ fn parallel_get_checksums_from_path(source_file_path: &String) -> Vec<file_verif
     }
 
     for handle in handles {
-        let result = handle.join().unwrap();
-        for csf in result {
+        let checksums_result = handle.join().unwrap();
+        for csf in checksums_result {
             existing_checksums.push(csf);
         }
     }

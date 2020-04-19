@@ -1,9 +1,9 @@
 [package]
 name = "reverse-checksum-renamer"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Martin Feil <foss2017@sgdw.de>"]
 
 [dependencies]
 crc = "^1.0.0"
-md5 = "0.3.7"
-num_cpus = "1.13.0"
+md5 = "^0.3.7"
+num_cpus = "^1.13.0"
