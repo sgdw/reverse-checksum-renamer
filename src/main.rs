@@ -8,8 +8,13 @@ mod sfv_reader;
 use std::fs;
 use std::env;
 use std::process;
+use std::thread;
+use std::sync::{Arc};
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use std::path::{Path, PathBuf};
+
+extern crate num_cpus;
 
 const STATE_FILE_FOUND: u8 = 0;
 const IGNORE_EXTENSIONS: &[&str] = &[".nfo", ".txt", ".srr", ".sfv", ".par2"];
@@ -34,6 +39,7 @@ fn main() {
     let mut group_into_subfolder = false;
     let mut only_complete_sets = false;
 
+    let mut parallel = false;
     let mut verbose = false;
     let mut dry_run = false;
 
@@ -81,6 +87,9 @@ fn main() {
 
             } else if args[i] == "-d" {
                 dry_run = true;
+
+            } else if args[i] == "--parallel" {
+                parallel = true;
 
             } else if args[i] == "--help" {
                 do_show_usage = true;
@@ -219,7 +228,13 @@ fn main() {
         }
 
         if paths_ok {
-            let mut existing_checksums = get_checksums_from_path(&source_file_path.unwrap());
+            let mut existing_checksums;
+            if parallel {
+                existing_checksums = parallel_get_checksums_from_path(&source_file_path.unwrap());
+            } else {
+                existing_checksums = get_checksums_from_path(&source_file_path.unwrap());
+            }
+            
             let destination_file_path = destination_file_path.unwrap();
 
             for mut catalog in source_catalogs {
@@ -484,6 +499,54 @@ fn get_checksums_from_path(source_file_path: &String) -> Vec<file_verification::
         let csf = file_verification::get_checksum_from_file(&path, true).unwrap();
         existing_checksums.push(csf);
     }
+    existing_checksums
+}
+
+// maybe use: https://docs.rs/threadpool/1.7.1/threadpool/
+// https://docs.rs/rayon/1.3.0/rayon/
+
+fn parallel_get_checksums_from_path(source_file_path: &String) -> Vec<file_verification::ChecksumEntry> {
+    let existing_files = get_files_from_path(&source_file_path).unwrap();
+    let mut existing_checksums: Vec<file_verification::ChecksumEntry> = Vec::new();
+    let num_files = existing_files.len();
+
+    let mut handles: Vec<thread::JoinHandle<Vec<file_verification::ChecksumEntry>>> = Vec::new();
+    let next_file_index = Arc::new(AtomicUsize::new(0));
+    let count_files_finished = Arc::new(AtomicUsize::new(0));
+    let arc_existing_files = Arc::new(existing_files);
+
+    for _i in 0..num_cpus::get() {
+        let next_file_index = next_file_index.clone();
+        let count_files_finished = count_files_finished.clone();
+        let arc_existing_files = arc_existing_files.clone();
+
+        let handle = thread::spawn(move || {
+            let mut checksums: Vec<file_verification::ChecksumEntry> = Vec::new();
+            loop {
+                let file_idx = next_file_index.fetch_add(1, Ordering::Relaxed);
+                if file_idx >= arc_existing_files.len() {
+                    break;
+                }
+                let existing_file = arc_existing_files.get(file_idx).unwrap();
+                let path = String::from(existing_file.as_path().to_str().unwrap());
+                println!("Checking file '{}' ...", path);
+                let csf = file_verification::get_checksum_from_file(&path, false).unwrap();
+                let cff = count_files_finished.fetch_add(1, Ordering::Relaxed);
+                println!("[{} of {}] Finished checking file '{}' ...", cff+1, num_files, path);
+                checksums.push(csf);
+            }
+            checksums
+        });
+        handles.push(handle);        
+    }
+
+    for handle in handles {
+        let result = handle.join().unwrap();
+        for csf in result {
+            existing_checksums.push(csf);
+        }
+    }
+
     existing_checksums
 }
 
